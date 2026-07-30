@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vitolen · Reparto — Armado de recorrido</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#14181C; --ink-soft:#3A4148;
+    --paper:#F7F4EE; --paper-dim:#EDE8DD; --paper-card:#FFFFFF;
+    --accent:#E8590C; --accent-deep:#B8430A;
+    --ok:#2F9E44; --ok-bg:#E7F6EB;
+    --danger:#C92A2A; --danger-bg:#FBEAEA;
+    --purple:#7137C9; --purple-bg:#F1EAFB;
+    --line:#D8D2C2;
+    --mono:'IBM Plex Mono', monospace; --sans:'IBM Plex Sans', sans-serif;
+  }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--paper-dim); font-family:var(--sans); color:var(--ink); }
+  header{ background:var(--ink); color:var(--paper); padding:14px 24px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; }
+  header h1{ font-family:var(--mono); font-size:14px; letter-spacing:.1em; text-transform:uppercase; margin:0; font-weight:500; }
+  header h1 span{ color:var(--accent); }
+  .who{ font-family:var(--mono); font-size:11px; color:#9AA0A6; }
+  main{ max-width:1100px; margin:0 auto; padding:24px; }
+  .grid2{ display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+  .card{ background:var(--paper-card); border:1px solid var(--line); border-radius:10px; margin-bottom:18px; }
+  .card h2{ font-size:13.5px; margin:0; padding:14px 18px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; }
+  .card-body{ padding:16px 18px; }
+  .field{ margin-bottom:14px; }
+  .field label{ display:block; font-family:var(--mono); font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-soft); margin-bottom:6px; }
+  input, select{ width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:6px; font-family:var(--sans); font-size:14px; background:var(--paper); }
+  .row2{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  button{ font-family:var(--sans); font-weight:600; font-size:13.5px; border:none; border-radius:6px; padding:10px 16px; cursor:pointer; }
+  .btn-primary{ background:var(--accent); color:#fff; }
+  .btn-primary:hover{ background:var(--accent-deep); }
+  .btn-primary:disabled{ background:var(--line); cursor:not-allowed; }
+  .btn-ghost{ background:transparent; border:1px solid var(--line); color:var(--ink); }
+  .btn-small{ font-size:11px; padding:5px 9px; }
+  .pendiente-row{ display:flex; align-items:flex-start; gap:10px; padding:10px 0; border-bottom:1px solid var(--paper-dim); }
+  .pendiente-row:last-child{ border-bottom:none; }
+  .pendiente-row input[type=checkbox]{ width:auto; margin-top:3px; }
+  .pendiente-nombre{ font-weight:600; font-size:13px; }
+  .pendiente-detalle{ font-family:var(--mono); font-size:10.5px; color:var(--ink-soft); margin-top:2px; }
+  .autocomplete{ position:relative; }
+  .suggestions{ position:absolute; top:100%; left:0; right:0; background:var(--paper-card); border:1px solid var(--line); border-top:none; border-radius:0 0 6px 6px; max-height:200px; overflow-y:auto; z-index:10; }
+  .suggestion{ padding:9px 12px; font-size:13px; cursor:pointer; border-bottom:1px solid var(--paper-dim); }
+  .suggestion:hover{ background:var(--paper); }
+  .hidden{ display:none; }
+  .stop-row{ display:flex; align-items:center; gap:10px; padding:9px 12px; border:1px solid var(--line); border-radius:8px; margin-bottom:7px; background:var(--paper); }
+  .stop-num{ font-family:var(--mono); font-size:11px; font-weight:600; width:22px; height:22px; border-radius:50%; background:var(--paper-dim); color:var(--ink-soft); display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+  .stop-info{ flex:1; min-width:0; }
+  .stop-nombre{ font-size:13px; font-weight:600; }
+  .stop-sub{ font-family:var(--mono); font-size:10.5px; color:var(--ink-soft); }
+  .badge{ font-family:var(--mono); font-size:9.5px; padding:2px 7px; border-radius:20px; flex-shrink:0; }
+  .badge-entrega{ background:#E7EEFB; color:#1C5FBF; }
+  .badge-visita{ background:var(--purple-bg); color:var(--purple); }
+  .stop-actions{ display:flex; gap:4px; flex-shrink:0; }
+  .icon-btn{ background:var(--paper-card); border:1px solid var(--line); border-radius:5px; width:26px; height:26px; padding:0; font-size:12px; }
+  .msg{ font-size:12.5px; padding:10px 12px; border-radius:6px; margin-bottom:12px; }
+  .msg-err{ background:var(--danger-bg); color:var(--danger); }
+  .msg-ok{ background:var(--ok-bg); color:var(--ok); }
+  .login-wrap{ display:flex; justify-content:center; padding:60px 20px; }
+  .login-card{ width:100%; max-width:360px; padding:32px 28px; text-align:center; }
+  .login-card h3{ margin:0 0 20px 0; }
+  .remito-cliente{ border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin-bottom:10px; }
+  .remito-cliente h4{ margin:0 0 2px 0; font-size:13.5px; }
+  .remito-cliente .dir{ font-family:var(--mono); font-size:10.5px; color:var(--ink-soft); margin-bottom:8px; }
+  .remito-linea{ display:flex; justify-content:space-between; font-size:12.5px; padding:3px 0; border-top:1px dashed var(--line); }
+  .remito-total{ font-weight:700; font-size:12.5px; margin-top:6px; padding-top:6px; border-top:1px solid var(--line); }
+  @media print{
+    header, #vistaLogin, .card h2 button, .no-print{ display:none !important; }
+    body{ background:#fff; }
+    main{ max-width:100%; padding:0; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Vitolen <span>·</span> Reparto — Armado de recorrido</h1>
+  <div class="who" id="whoami"></div>
+</header>
+
+<main>
+
+  <div id="vistaLogin" class="login-wrap">
+    <div class="card login-card">
+      <h3>Iniciar sesión</h3>
+      <div id="loginMsg"></div>
+      <div class="field"><label>Email</label><input id="loginEmail" type="text"></div>
+      <div class="field"><label>Contraseña</label><input id="loginPass" type="password"></div>
+      <button class="btn-primary" style="width:100%" onclick="login()">Ingresar</button>
+    </div>
+  </div>
+
+  <div id="vistaApp" class="hidden">
+
+    <div class="card">
+      <h2>Datos del recorrido</h2>
+      <div class="card-body">
+        <div class="row2">
+          <div class="field">
+            <label>Sucursal</label>
+            <select id="selectSucursal" onchange="cambiarSucursal()"></select>
+          </div>
+          <div class="field">
+            <label>Fecha</label>
+            <input id="fecha" type="date">
+          </div>
+        </div>
+        <div class="field" style="margin-bottom:0;">
+          <label>Operador asignado</label>
+          <select id="selectOperador"></select>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid2">
+      <div class="card">
+        <h2>Envíos pendientes de asignar</h2>
+        <div class="card-body" id="listaPendientes">
+          <p style="font-size:12.5px;color:var(--ink-soft);">Cargando…</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Agregar visita (sin envío)</h2>
+        <div class="card-body">
+          <div class="field autocomplete" style="margin-bottom:0;">
+            <label>Buscar cliente</label>
+            <input id="buscarVisita" placeholder="Nombre del cliente…" oninput="buscarClientesVisita()" autocomplete="off">
+            <div id="sugerenciasVisita" class="suggestions hidden"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Orden del recorrido <span class="badge" style="background:var(--paper-dim);color:var(--ink-soft);" id="contadorParadas">0 paradas</span></h2>
+      <div class="card-body">
+        <div id="cargaMsg"></div>
+        <div id="listaOrden"><p style="font-size:12.5px;color:var(--ink-soft);">Todavía no agregaste paradas.</p></div>
+        <button class="btn-primary no-print" style="margin-top:10px;" onclick="confirmarRecorrido()">Confirmar recorrido y generar remito</button>
+      </div>
+    </div>
+
+    <div class="card hidden" id="cardRemito">
+      <h2>Remito consolidado <button class="btn-ghost btn-small no-print" onclick="window.print()">Imprimir</button></h2>
+      <div class="card-body" id="remitoContenido"></div>
+    </div>
+
+  </div>
+</main>
+
+<script>
+const SUPABASE_URL = "https://mkrotthmdikzgviiklwu.supabase.co";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1rcm90dGhtZGlremd2aWlrbHd1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUxNDcxNjMsImV4cCI6MjEwMDcyMzE2M30.iJuZhIvYPtLg6Sxt9Z986KHesG3cYVe1KtSo0BcWw10";
+const client = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+let usuarioActual = null;
+let perfilActual = null;
+let sucursales = [];
+let sucursalSeleccionada = null;
+let pendientesPorCliente = {};
+let ordenParadas = []; // { cliente_id, nombre, direccion, tipo, envios: [...] }
+let debounceTimer = null;
+
+async function login(){
+  const email = document.getElementById('loginEmail').value.trim();
+  const pass = document.getElementById('loginPass').value;
+  const msg = document.getElementById('loginMsg');
+  msg.innerHTML = '';
+  const { data, error } = await client.auth.signInWithPassword({ email, password: pass });
+  if(error){ msg.innerHTML = `<div class="msg msg-err">${error.message}</div>`; return; }
+  usuarioActual = data.user;
+  await cargarPerfilYArrancar();
+}
+
+async function cargarPerfilYArrancar(){
+  const { data: perfil, error } = await client.from('perfiles').select('*').eq('id', usuarioActual.id).single();
+  if(error){ document.getElementById('loginMsg').innerHTML = `<div class="msg msg-err">${error.message}</div>`; return; }
+  perfilActual = perfil;
+
+  const { data: sucs } = await client.from('sucursales').select('*').order('nombre');
+  sucursales = sucs || [];
+
+  const selector = document.getElementById('selectSucursal');
+  selector.innerHTML = '';
+
+  if(perfilActual.rol === 'admin'){
+    sucursales.forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s.id; opt.textContent = s.nombre;
+      selector.appendChild(opt);
+    });
+    selector.disabled = false;
+    sucursalSeleccionada = sucursales.find(s => s.id === perfilActual.sucursal_id)?.id || sucursales[0]?.id;
+  } else {
+    const propia = sucursales.find(s => s.id === perfilActual.sucursal_id);
+    const opt = document.createElement('option');
+    opt.value = propia?.id || ''; opt.textContent = propia?.nombre || 'Sin sucursal';
+    selector.appendChild(opt);
+    selector.disabled = true;
+    sucursalSeleccionada = propia?.id;
+  }
+  selector.value = sucursalSeleccionada;
+
+  document.getElementById('fecha').valueAsDate = new Date();
+  document.getElementById('whoami').textContent = `${perfilActual.nombre_completo} · ${perfilActual.rol.toUpperCase()}`;
+  document.getElementById('vistaLogin').classList.add('hidden');
+  document.getElementById('vistaApp').classList.remove('hidden');
+
+  await cargarOperadores();
+  await cargarPendientes();
+}
+
+async function cambiarSucursal(){
+  sucursalSeleccionada = document.getElementById('selectSucursal').value;
+  ordenParadas = [];
+  renderOrden();
+  await cargarOperadores();
+  await cargarPendientes();
+}
+
+async function cargarOperadores(){
+  const { data } = await client.from('perfiles').select('id, nombre_completo, rol').eq('sucursal_id', sucursalSeleccionada).order('nombre_completo');
+  const sel = document.getElementById('selectOperador');
+  sel.innerHTML = '';
+  (data || []).forEach(p => {
+    const opt = document.createElement('option');
+    opt.value = p.id; opt.textContent = `${p.nombre_completo} (${p.rol})`;
+    sel.appendChild(opt);
+  });
+  if(!data || data.length === 0){
+    const opt = document.createElement('option');
+    opt.value = ''; opt.textContent = 'No hay usuarios en esta sucursal';
+    sel.appendChild(opt);
+  }
+}
+
+async function cargarPendientes(){
+  const cont = document.getElementById('listaPendientes');
+  cont.innerHTML = '<p style="font-size:12.5px;color:var(--ink-soft);">Cargando…</p>';
+
+  const { data, error } = await client
+    .from('envios')
+    .select('id, referencia, cantidad_bultos, tipo_movimiento, cliente_id, clientes(nombre, direccion)')
+    .eq('sucursal_id', sucursalSeleccionada)
+    .is('parada_id', null);
+
+  if(error){ cont.innerHTML = `<div class="msg msg-err">${error.message}</div>`; return; }
+
+  pendientesPorCliente = {};
+  (data || []).forEach(e => {
+    if(!pendientesPorCliente[e.cliente_id]){
+      pendientesPorCliente[e.cliente_id] = {
+        cliente_id: e.cliente_id,
+        nombre: e.clientes?.nombre || '—',
+        direccion: e.clientes?.direccion || '',
+        envios: []
+      };
+    }
+    pendientesPorCliente[e.cliente_id].envios.push(e);
+  });
+
+  renderPendientes();
+}
+
+function renderPendientes(){
+  const cont = document.getElementById('listaPendientes');
+  const grupos = Object.values(pendientesPorCliente);
+  if(grupos.length === 0){
+    cont.innerHTML = '<p style="font-size:12.5px;color:var(--ink-soft);">No hay envíos pendientes en esta sucursal.</p>';
+    return;
+  }
+  cont.innerHTML = '';
+  grupos.forEach(g => {
+    const totalBultos = g.envios.reduce((s, e) => s + e.cantidad_bultos, 0);
+    const enOrden = ordenParadas.some(p => p.cliente_id === g.cliente_id);
+    const div = document.createElement('div');
+    div.className = 'pendiente-row';
+    div.innerHTML = `
+      <input type="checkbox" ${enOrden ? 'checked' : ''} onchange="toggleEntrega('${g.cliente_id}')">
+      <div>
+        <div class="pendiente-nombre">${g.nombre}</div>
+        <div class="pendiente-detalle">${totalBultos} bultos · ${g.envios.length} referencia(s)</div>
+      </div>
+    `;
+    cont.appendChild(div);
+  });
+}
+
+function toggleEntrega(clienteId){
+  const yaEsta = ordenParadas.findIndex(p => p.cliente_id === clienteId);
+  if(yaEsta >= 0){
+    ordenParadas.splice(yaEsta, 1);
+  } else {
+    const g = pendientesPorCliente[clienteId];
+    ordenParadas.push({ cliente_id: g.cliente_id, nombre: g.nombre, direccion: g.direccion, tipo: 'entrega', envios: g.envios });
+  }
+  renderOrden();
+  renderPendientes();
+}
+
+function buscarClientesVisita(){
+  clearTimeout(debounceTimer);
+  const termino = document.getElementById('buscarVisita').value.trim();
+  const caja = document.getElementById('sugerenciasVisita');
+  if(termino.length < 2){ caja.classList.add('hidden'); caja.innerHTML=''; return; }
+
+  debounceTimer = setTimeout(async () => {
+    const { data, error } = await client
+      .from('clientes')
+      .select('id, nombre, direccion')
+      .eq('sucursal_id', sucursalSeleccionada)
+      .ilike('nombre', `%${termino}%`)
+      .limit(8);
+
+    caja.innerHTML = '';
+    if(error || !data){ caja.classList.add('hidden'); return; }
+
+    data.forEach(c => {
+      const div = document.createElement('div');
+      div.className = 'suggestion';
+      div.textContent = c.nombre;
+      div.onclick = () => agregarVisita(c);
+      caja.appendChild(div);
+    });
+    caja.classList.remove('hidden');
+  }, 300);
+}
+
+function agregarVisita(c){
+  if(ordenParadas.some(p => p.cliente_id === c.id)){
+    document.getElementById('sugerenciasVisita').classList.add('hidden');
+    document.getElementById('buscarVisita').value = '';
+    return;
+  }
+  ordenParadas.push({ cliente_id: c.id, nombre: c.nombre, direccion: c.direccion || '', tipo: 'visita', envios: [] });
+  document.getElementById('sugerenciasVisita').classList.add('hidden');
+  document.getElementById('buscarVisita').value = '';
+  renderOrden();
+}
+
+function moverArriba(i){ if(i === 0) return; [ordenParadas[i-1], ordenParadas[i]] = [ordenParadas[i], ordenParadas[i-1]]; renderOrden(); }
+function moverAbajo(i){ if(i === ordenParadas.length - 1) return; [ordenParadas[i+1], ordenParadas[i]] = [ordenParadas[i], ordenParadas[i+1]]; renderOrden(); }
+function quitarParada(i){
+  const p = ordenParadas[i];
+  ordenParadas.splice(i, 1);
+  renderOrden();
+  if(p.tipo === 'entrega') renderPendientes();
+}
+
+function renderOrden(){
+  const cont = document.getElementById('listaOrden');
+  document.getElementById('contadorParadas').textContent = `${ordenParadas.length} paradas`;
+  if(ordenParadas.length === 0){
+    cont.innerHTML = '<p style="font-size:12.5px;color:var(--ink-soft);">Todavía no agregaste paradas.</p>';
+    return;
+  }
+  cont.innerHTML = '';
+  ordenParadas.forEach((p, i) => {
+    const totalBultos = p.envios.reduce((s, e) => s + e.cantidad_bultos, 0);
+    const div = document.createElement('div');
+    div.className = 'stop-row';
+    div.innerHTML = `
+      <div class="stop-num">${i + 1}</div>
+      <div class="stop-info">
+        <div class="stop-nombre">${p.nombre}</div>
+        <div class="stop-sub">${p.direccion || 'sin dirección'}${p.tipo === 'entrega' ? ' · ' + totalBultos + ' bultos' : ''}</div>
+      </div>
+      <span class="badge ${p.tipo === 'entrega' ? 'badge-entrega' : 'badge-visita'}">${p.tipo === 'entrega' ? 'Entrega' : 'Visita'}</span>
+      <div class="stop-actions no-print">
+        <button class="icon-btn" onclick="moverArriba(${i})">↑</button>
+        <button class="icon-btn" onclick="moverAbajo(${i})">↓</button>
+        <button class="icon-btn" onclick="quitarParada(${i})">✕</button>
+      </div>
+    `;
+    cont.appendChild(div);
+  });
+}
+
+async function confirmarRecorrido(){
+  const msg = document.getElementById('cargaMsg');
+  msg.innerHTML = '';
+  const operadorId = document.getElementById('selectOperador').value;
+  const fecha = document.getElementById('fecha').value;
+
+  if(!operadorId){ msg.innerHTML = `<div class="msg msg-err">Elegí un operador.</div>`; return; }
+  if(ordenParadas.length === 0){ msg.innerHTML = `<div class="msg msg-err">Agregá al menos una parada.</div>`; return; }
+
+  const { data: recorrido, error: errRec } = await client.from('recorridos').insert({
+    sucursal_id: sucursalSeleccionada, operador_id: operadorId, fecha, estado: 'planificado'
+  }).select().single();
+  if(errRec){ msg.innerHTML = `<div class="msg msg-err">${errRec.message}</div>`; return; }
+
+  for(let i = 0; i < ordenParadas.length; i++){
+    const p = ordenParadas[i];
+    const { data: parada, error: errParada } = await client.from('paradas').insert({
+      recorrido_id: recorrido.id, cliente_id: p.cliente_id, orden: i + 1, tipo: p.tipo, estado: 'pendiente'
+    }).select().single();
+    if(errParada){ msg.innerHTML = `<div class="msg msg-err">Parada ${i+1}: ${errParada.message}</div>`; return; }
+
+    if(p.envios.length > 0){
+      const ids = p.envios.map(e => e.id);
+      const { error: errUpd } = await client.from('envios').update({ parada_id: parada.id }).in('id', ids);
+      if(errUpd){ msg.innerHTML = `<div class="msg msg-err">${errUpd.message}</div>`; return; }
+    }
+  }
+
+  msg.innerHTML = `<div class="msg msg-ok">Recorrido confirmado con ${ordenParadas.length} paradas.</div>`;
+  generarRemito();
+  await cargarPendientes();
+}
+
+function generarRemito(){
+  const cont = document.getElementById('remitoContenido');
+  cont.innerHTML = '';
+  const soloEntregas = ordenParadas.filter(p => p.tipo === 'entrega');
+
+  if(soloEntregas.length === 0){
+    cont.innerHTML = '<p style="font-size:12.5px;color:var(--ink-soft);">Este recorrido no tiene envíos, solo visitas.</p>';
+  } else {
+    soloEntregas.forEach((p, i) => {
+      const totalBultos = p.envios.reduce((s, e) => s + e.cantidad_bultos, 0);
+      const div = document.createElement('div');
+      div.className = 'remito-cliente';
+      let lineas = p.envios.map(e => `
+        <div class="remito-linea"><span>${e.referencia} (${e.tipo_movimiento === 'retiro' ? 'Retiro' : 'Entrega'})</span><span>${e.cantidad_bultos} bulto(s)</span></div>
+      `).join('');
+      div.innerHTML = `
+        <h4>${i + 1}. ${p.nombre}</h4>
+        <div class="dir">${p.direccion || 'sin dirección'}</div>
+        ${lineas}
+        <div class="remito-total">Total: ${totalBultos} bultos</div>
+      `;
+      cont.appendChild(div);
+    });
+  }
+  document.getElementById('cardRemito').classList.remove('hidden');
+}
+
+document.getElementById('loginPass').addEventListener('keydown', (ev) => { if(ev.key === 'Enter') login(); });
+</script>
+</body>
+</html>

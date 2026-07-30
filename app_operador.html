@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vitolen · Reparto — Operador</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#14181C; --ink-soft:#3A4148;
+    --paper:#F7F4EE; --paper-dim:#EDE8DD; --paper-card:#FFFFFF;
+    --accent:#E8590C; --accent-deep:#B8430A;
+    --ok:#2F9E44; --ok-bg:#E7F6EB;
+    --danger:#C92A2A; --danger-bg:#FBEAEA;
+    --purple:#7137C9; --purple-bg:#F1EAFB;
+    --line:#D8D2C2;
+    --mono:'IBM Plex Mono', monospace; --sans:'IBM Plex Sans', sans-serif;
+  }
+  *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body{ margin:0; background:var(--paper); font-family:var(--sans); color:var(--ink); max-width:480px; margin-left:auto; margin-right:auto; }
+  header{ background:var(--ink); color:var(--paper); padding:14px 16px; position:sticky; top:0; z-index:20; }
+  header .top{ display:flex; justify-content:space-between; align-items:center; }
+  header h1{ font-family:var(--mono); font-size:13px; letter-spacing:.08em; text-transform:uppercase; margin:0; font-weight:500; }
+  header h1 span{ color:var(--accent); }
+  .who{ font-family:var(--mono); font-size:10px; color:#9AA0A6; margin-top:2px; }
+  .progress-track{ height:5px; background:#2A3138; border-radius:4px; margin-top:10px; overflow:hidden; }
+  .progress-fill{ height:100%; background:var(--accent); transition:width .3s; }
+  main{ padding:14px 14px 90px 14px; }
+  .card{ background:var(--paper-card); border:1px solid var(--line); border-radius:10px; margin-bottom:14px; }
+  .card-body{ padding:14px 16px; }
+  .field{ margin-bottom:12px; }
+  .field label{ display:block; font-family:var(--mono); font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-soft); margin-bottom:6px; }
+  input{ width:100%; padding:11px 12px; border:1px solid var(--line); border-radius:6px; font-size:14px; background:var(--paper); }
+  button{ font-family:var(--sans); font-weight:600; font-size:14px; border:none; border-radius:8px; padding:12px; cursor:pointer; }
+  .btn-primary{ background:var(--accent); color:#fff; width:100%; }
+  .btn-primary:disabled{ background:var(--line); }
+  .btn-ghost{ background:transparent; border:1px solid var(--line); color:var(--ink); width:100%; }
+  .msg{ font-size:12.5px; padding:10px 12px; border-radius:6px; margin-bottom:12px; }
+  .msg-err{ background:var(--danger-bg); color:var(--danger); }
+  .msg-ok{ background:var(--ok-bg); color:var(--ok); }
+  .hidden{ display:none; }
+  .login-wrap{ padding:60px 20px; }
+  .login-card{ padding:28px 22px; text-align:center; }
+  .login-card h3{ margin:0 0 18px 0; }
+
+  .stop{ display:flex; align-items:center; gap:10px; background:var(--paper-card); border:1px solid var(--line); border-radius:9px; padding:11px 13px; margin-bottom:8px; }
+  .stop-num{ font-family:var(--mono); font-size:11px; font-weight:600; width:24px; height:24px; border-radius:50%; display:flex; align-items:center; justify-content:center; background:var(--paper-dim); color:var(--ink-soft); flex-shrink:0; }
+  .stop.resuelta .stop-num{ background:var(--ok-bg); color:var(--ok); }
+  .stop.actual .stop-num{ background:var(--accent); color:#fff; }
+  .stop-info{ flex:1; min-width:0; }
+  .stop-nombre{ font-size:13.5px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .stop-addr{ font-size:11.5px; color:var(--ink-soft); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .badge{ font-family:var(--mono); font-size:9px; text-transform:uppercase; letter-spacing:.05em; padding:2px 6px; border-radius:10px; flex-shrink:0; }
+  .badge-entrega{ background:#E7EEFB; color:#1C5FBF; }
+  .badge-visita{ background:var(--purple-bg); color:var(--purple); }
+  .stop-arrow{ font-size:16px; color:var(--ink-soft); }
+
+  .back-row{ display:flex; align-items:center; gap:10px; margin-bottom:14px; }
+  .back-row .arrow{ font-family:var(--mono); font-size:18px; color:var(--accent); cursor:pointer; }
+  .client-card h5{ margin:0 0 3px 0; font-size:16px; }
+  .client-card .addr{ font-size:12.5px; color:var(--ink-soft); margin-bottom:2px; }
+  .envio-linea{ display:flex; justify-content:space-between; font-size:12.5px; padding:5px 0; border-top:1px dashed var(--line); }
+  .envio-total{ font-weight:700; font-size:12.5px; margin-top:4px; padding-top:6px; border-top:1px solid var(--line); }
+  .section-label{ font-family:var(--mono); font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-soft); margin:16px 0 8px 0; }
+  .status-grid{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .status-btn{ padding:12px 8px; border-radius:8px; border:1px solid var(--line); background:var(--paper-card); font-size:12.5px; font-weight:600; text-align:center; cursor:pointer; }
+  .status-btn.sel{ background:var(--ok-bg); border-color:var(--ok); color:var(--ok); }
+  .sig-pad{ margin-top:6px; background:#fff; border:1px solid var(--line); border-radius:8px; height:160px; position:relative; touch-action:none; }
+  .sig-pad canvas{ width:100%; height:100%; display:block; border-radius:8px; }
+  .sig-clear{ font-family:var(--mono); font-size:11px; color:var(--accent); background:none; border:none; cursor:pointer; padding:6px 0; }
+  .gps-note{ font-family:var(--mono); font-size:10px; color:var(--ink-soft); margin-top:10px; display:flex; align-items:center; gap:6px; }
+  .pulse{ width:6px; height:6px; border-radius:50%; background:var(--ok); animation:pulse 1.4s infinite; }
+  @keyframes pulse{ 0%,100%{opacity:1;} 50%{opacity:.3;} }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="top">
+    <h1>Vitolen <span>·</span> Reparto</h1>
+    <div></div>
+  </div>
+  <div class="who" id="whoami"></div>
+  <div class="progress-track hidden" id="progressTrack"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
+</header>
+
+<main>
+
+  <div id="vistaLogin" class="login-wrap">
+    <div class="card login-card">
+      <h3>Iniciar sesión</h3>
+      <div id="loginMsg"></div>
+      <div class="field"><label>Usuario</label><input id="loginEmail" type="text"></div>
+      <div class="field"><label>Contraseña</label><input id="loginPass" type="password"></div>
+      <button class="btn-primary" onclick="login()">Ingresar</button>
+    </div>
+  </div>
+
+  <div id="vistaSinRecorrido" class="hidden">
+    <div class="card"><div class="card-body">
+      <p style="font-size:13px;color:var(--ink-soft);">No tenés un recorrido asignado para hoy.</p>
+    </div></div>
+  </div>
+
+  <div id="vistaLista" class="hidden">
+    <div id="listaMsg"></div>
+    <button id="btnIniciar" class="btn-primary hidden" style="margin-bottom:14px;" onclick="iniciarRecorrido()">Iniciar recorrido</button>
+    <div id="listaParadas"></div>
+    <button id="btnFinalizar" class="btn-ghost hidden" style="margin-top:10px;" onclick="finalizarRecorrido()">Finalizar recorrido</button>
+    <div class="gps-note hidden" id="gpsNote"><span class="pulse"></span> Compartiendo ubicación en vivo</div>
+  </div>
+
+  <div id="vistaDetalle" class="hidden">
+    <div class="back-row"><span class="arrow" onclick="volverALista()">←</span><span style="font-family:var(--mono);font-size:11px;color:var(--ink-soft);" id="detalleContador"></span></div>
+    <div id="detalleMsg"></div>
+    <div class="card"><div class="card-body client-card" id="clienteInfo"></div></div>
+
+    <div class="section-label">Resultado</div>
+    <div class="status-grid" id="statusGrid"></div>
+
+    <div id="bloqueFirma" class="hidden">
+      <div class="section-label">Firma de conformidad</div>
+      <div class="sig-pad"><canvas id="sigCanvas"></canvas></div>
+      <button class="sig-clear" onclick="limpiarFirma()">Borrar firma</button>
+    </div>
+
+    <button class="btn-primary" style="margin-top:14px;" id="btnConfirmar" onclick="confirmarParada()" disabled>Confirmar</button>
+  </div>
+
+</main>
+
+<script>
+const SUPABASE_URL = "https://mkrotthmdikzgviiklwu.supabase.co";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1rcm90dGhtZGlremd2aWlrbHd1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUxNDcxNjMsImV4cCI6MjEwMDcyMzE2M30.iJuZhIvYPtLg6Sxt9Z986KHesG3cYVe1KtSo0BcWw10";
+const client = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const ESTADOS_ENTREGA = [
+  { valor:'entregado', label:'Entregado', firma:true },
+  { valor:'no_entregado_ausente', label:'Ausente', firma:false },
+  { valor:'no_entregado_rechazado', label:'Rechazado', firma:false },
+  { valor:'no_entregado_direccion_incorrecta', label:'Dirección incorrecta', firma:false },
+  { valor:'reprogramado', label:'Reprogramado', firma:false },
+];
+const ESTADOS_VISITA = [
+  { valor:'visitado', label:'Visitado', firma:false },
+  { valor:'reprogramado', label:'Reprogramado', firma:false },
+];
+
+let usuarioActual = null;
+let perfilActual = null;
+let recorridoActual = null;
+let paradas = [];
+let paradaEnEdicion = null;
+let estadoElegido = null;
+let firmaTrazada = false;
+let watchId = null;
+let ultimaPosEnviada = null;
+
+async function login(){
+  const email = document.getElementById('loginEmail').value.trim();
+  const pass = document.getElementById('loginPass').value;
+  const msg = document.getElementById('loginMsg');
+  msg.innerHTML = '';
+  const { data, error } = await client.auth.signInWithPassword({ email, password: pass });
+  if(error){ msg.innerHTML = `<div class="msg msg-err">${error.message}</div>`; return; }
+  usuarioActual = data.user;
+  await arrancar();
+}
+
+async function arrancar(){
+  const { data: perfil, error } = await client.from('perfiles').select('*').eq('id', usuarioActual.id).single();
+  if(error){ document.getElementById('loginMsg').innerHTML = `<div class="msg msg-err">${error.message}</div>`; return; }
+  perfilActual = perfil;
+  document.getElementById('whoami').textContent = `${perfilActual.nombre_completo}`;
+  document.getElementById('vistaLogin').classList.add('hidden');
+
+  const hoy = new Date().toISOString().slice(0,10);
+  const { data: recorridos } = await client
+    .from('recorridos')
+    .select('*')
+    .eq('operador_id', usuarioActual.id)
+    .eq('fecha', hoy)
+    .order('created_at', { ascending:false })
+    .limit(1);
+
+  if(!recorridos || recorridos.length === 0){
+    document.getElementById('vistaSinRecorrido').classList.remove('hidden');
+    return;
+  }
+  recorridoActual = recorridos[0];
+  await cargarParadas();
+  document.getElementById('vistaLista').classList.remove('hidden');
+  document.getElementById('progressTrack').classList.remove('hidden');
+
+  if(recorridoActual.estado === 'en_curso'){
+    iniciarSeguimientoGPS();
+  }
+}
+
+async function cargarParadas(){
+  const { data, error } = await client
+    .from('paradas')
+    .select('*, clientes(nombre, direccion)')
+    .eq('recorrido_id', recorridoActual.id)
+    .order('orden');
+
+  if(error){ document.getElementById('listaMsg').innerHTML = `<div class="msg msg-err">${error.message}</div>`; return; }
+
+  paradas = [];
+  for(const p of data){
+    let envios = [];
+    if(p.tipo === 'entrega'){
+      const { data: envs } = await client.from('envios').select('*').eq('parada_id', p.id);
+      envios = envs || [];
+    }
+    paradas.push({ ...p, envios });
+  }
+  renderLista();
+}
+
+function renderLista(){
+  const cont = document.getElementById('listaParadas');
+  cont.innerHTML = '';
+
+  const resueltas = paradas.filter(p => p.estado !== 'pendiente').length;
+  document.getElementById('progressFill').style.width = paradas.length ? `${(resueltas/paradas.length)*100}%` : '0%';
+
+  const primeraPendienteIdx = paradas.findIndex(p => p.estado === 'pendiente');
+
+  paradas.forEach((p, i) => {
+    const div = document.createElement('div');
+    const esActual = i === primeraPendienteIdx;
+    div.className = 'stop' + (p.estado !== 'pendiente' ? ' resuelta' : '') + (esActual ? ' actual' : '');
+    const totalBultos = p.envios.reduce((s,e)=>s+e.cantidad_bultos,0);
+    div.innerHTML = `
+      <div class="stop-num">${p.estado !== 'pendiente' ? '✓' : (i+1)}</div>
+      <div class="stop-info">
+        <div class="stop-nombre">${p.clientes?.nombre || '—'}</div>
+        <div class="stop-addr">${p.clientes?.direccion || 'sin dirección'}${p.tipo==='entrega' ? ' · '+totalBultos+' bultos' : ''}</div>
+      </div>
+      <span class="badge ${p.tipo==='entrega' ? 'badge-entrega' : 'badge-visita'}">${p.tipo==='entrega' ? 'Entrega' : 'Visita'}</span>
+      <span class="stop-arrow">›</span>
+    `;
+    div.onclick = () => abrirDetalle(i);
+    cont.appendChild(div);
+  });
+
+  document.getElementById('btnIniciar').classList.toggle('hidden', recorridoActual.estado !== 'planificado');
+  document.getElementById('btnFinalizar').classList.toggle('hidden', !(recorridoActual.estado === 'en_curso' && resueltas === paradas.length && paradas.length > 0));
+  document.getElementById('gpsNote').classList.toggle('hidden', recorridoActual.estado !== 'en_curso');
+}
+
+async function iniciarRecorrido(){
+  const { error } = await client.from('recorridos').update({ estado:'en_curso', iniciado_en: new Date().toISOString() }).eq('id', recorridoActual.id);
+  if(error){ document.getElementById('listaMsg').innerHTML = `<div class="msg msg-err">${error.message}</div>`; return; }
+  recorridoActual.estado = 'en_curso';
+  iniciarSeguimientoGPS();
+  renderLista();
+}
+
+async function finalizarRecorrido(){
+  detenerSeguimientoGPS();
+  const { error } = await client.from('recorridos').update({ estado:'finalizado', finalizado_en: new Date().toISOString() }).eq('id', recorridoActual.id);
+  if(error){ document.getElementById('listaMsg').innerHTML = `<div class="msg msg-err">${error.message}</div>`; return; }
+  recorridoActual.estado = 'finalizado';
+  document.getElementById('listaMsg').innerHTML = `<div class="msg msg-ok">Recorrido finalizado. ¡Buen trabajo!</div>`;
+  renderLista();
+}
+
+function distanciaMetros(a, b){
+  const R = 6371000;
+  const dLat = (b.lat - a.lat) * Math.PI/180;
+  const dLng = (b.lng - a.lng) * Math.PI/180;
+  const s = Math.sin(dLat/2)**2 + Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLng/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1-s));
+}
+
+function iniciarSeguimientoGPS(){
+  if(!navigator.geolocation || watchId !== null) return;
+  watchId = navigator.geolocation.watchPosition(async (pos) => {
+    const actual = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+    if(!ultimaPosEnviada || distanciaMetros(ultimaPosEnviada, actual) >= 15){
+      ultimaPosEnviada = actual;
+      await client.from('posiciones').insert({ recorrido_id: recorridoActual.id, lat: actual.lat, lng: actual.lng });
+    }
+  }, (err) => console.warn('GPS:', err.message), { enableHighAccuracy:true, maximumAge:5000 });
+  document.getElementById('gpsNote').classList.remove('hidden');
+}
+
+function detenerSeguimientoGPS(){
+  if(watchId !== null){ navigator.geolocation.clearWatch(watchId); watchId = null; }
+}
+
+function abrirDetalle(index){
+  paradaEnEdicion = paradas[index];
+  estadoElegido = null;
+  firmaTrazada = false;
+  document.getElementById('detalleMsg').innerHTML = '';
+  document.getElementById('detalleContador').textContent = `Parada ${index+1} de ${paradas.length}`;
+
+  const totalBultos = paradaEnEdicion.envios.reduce((s,e)=>s+e.cantidad_bultos,0);
+  let lineas = paradaEnEdicion.envios.map(e => `
+    <div class="envio-linea"><span>${e.referencia} (${e.tipo_movimiento==='retiro'?'Retiro':'Entrega'})</span><span>${e.cantidad_bultos} bulto(s)</span></div>
+  `).join('');
+
+  document.getElementById('clienteInfo').innerHTML = `
+    <span class="badge ${paradaEnEdicion.tipo==='entrega' ? 'badge-entrega' : 'badge-visita'}">${paradaEnEdicion.tipo==='entrega' ? 'Entrega' : 'Visita'}</span>
+    <h5 style="margin-top:8px;">${paradaEnEdicion.clientes?.nombre || '—'}</h5>
+    <div class="addr">${paradaEnEdicion.clientes?.direccion || 'sin dirección'}</div>
+    ${paradaEnEdicion.tipo==='entrega' ? lineas + `<div class="envio-total">Total: ${totalBultos} bultos</div>` : ''}
+  `;
+
+  const opciones = paradaEnEdicion.tipo === 'entrega' ? ESTADOS_ENTREGA : ESTADOS_VISITA;
+  const grid = document.getElementById('statusGrid');
+  grid.innerHTML = '';
+  opciones.forEach(op => {
+    const btn = document.createElement('div');
+    btn.className = 'status-btn' + (paradaEnEdicion.estado === op.valor ? ' sel' : '');
+    btn.textContent = op.label;
+    btn.onclick = () => elegirEstado(op, btn);
+    grid.appendChild(btn);
+  });
+
+  document.getElementById('bloqueFirma').classList.add('hidden');
+  document.getElementById('btnConfirmar').disabled = true;
+
+  document.getElementById('vistaLista').classList.add('hidden');
+  document.getElementById('vistaDetalle').classList.remove('hidden');
+}
+
+function elegirEstado(op, btnEl){
+  estadoElegido = op;
+  document.querySelectorAll('#statusGrid .status-btn').forEach(b => b.classList.remove('sel'));
+  btnEl.classList.add('sel');
+
+  const necesitaFirma = op.firma;
+  document.getElementById('bloqueFirma').classList.toggle('hidden', !necesitaFirma);
+  if(necesitaFirma) setTimeout(prepararCanvas, 30);
+
+  document.getElementById('btnConfirmar').disabled = necesitaFirma ? !firmaTrazada : false;
+}
+
+function prepararCanvas(){
+  const canvas = document.getElementById('sigCanvas');
+  const ctx = canvas.getContext('2d');
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * devicePixelRatio;
+  canvas.height = rect.height * devicePixelRatio;
+  ctx.scale(devicePixelRatio, devicePixelRatio);
+  ctx.strokeStyle = '#14181C'; ctx.lineWidth = 2; ctx.lineCap = 'round';
+
+  let drawing = false;
+  const pos = (e) => { const r = canvas.getBoundingClientRect(); const p = e.touches ? e.touches[0] : e; return { x: p.clientX - r.left, y: p.clientY - r.top }; };
+  const start = (e) => { drawing = true; const p = pos(e); ctx.beginPath(); ctx.moveTo(p.x,p.y); e.preventDefault(); };
+  const move = (e) => { if(!drawing) return; const p = pos(e); ctx.lineTo(p.x,p.y); ctx.stroke(); firmaTrazada = true; if(estadoElegido) document.getElementById('btnConfirmar').disabled = !firmaTrazada; e.preventDefault(); };
+  const end = () => { drawing = false; };
+
+  canvas.onmousedown = start; canvas.onmousemove = move; window.onmouseup = end;
+  canvas.ontouchstart = start; canvas.ontouchmove = move; canvas.ontouchend = end;
+}
+
+function limpiarFirma(){
+  const canvas = document.getElementById('sigCanvas');
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  firmaTrazada = false;
+  if(estadoElegido?.firma) document.getElementById('btnConfirmar').disabled = true;
+}
+
+function volverALista(){
+  document.getElementById('vistaDetalle').classList.add('hidden');
+  document.getElementById('vistaLista').classList.remove('hidden');
+}
+
+function obtenerPosicionActual(){
+  return new Promise((resolve) => {
+    if(!navigator.geolocation){ resolve(null); return; }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      () => resolve(null),
+      { timeout: 4000 }
+    );
+  });
+}
+
+async function confirmarParada(){
+  const msg = document.getElementById('detalleMsg');
+  msg.innerHTML = '';
+  document.getElementById('btnConfirmar').disabled = true;
+
+  let firmaUrl = null;
+  if(estadoElegido.firma){
+    const canvas = document.getElementById('sigCanvas');
+    const blob = await new Promise(res => canvas.toBlob(res, 'image/png'));
+    const path = `${recorridoActual.id}/${paradaEnEdicion.id}.png`;
+    const { error: errUpload } = await client.storage.from('firmas').upload(path, blob, { upsert:true, contentType:'image/png' });
+    if(errUpload){ msg.innerHTML = `<div class="msg msg-err">Error subiendo firma: ${errUpload.message}</div>`; document.getElementById('btnConfirmar').disabled = false; return; }
+    firmaUrl = path;
+  }
+
+  const pos = await obtenerPosicionActual();
+
+  const { error } = await client.from('paradas').update({
+    estado: estadoElegido.valor,
+    marcado_por: usuarioActual.id,
+    marcado_en: new Date().toISOString(),
+    firma_url: firmaUrl,
+    lat_registrada: pos?.lat || null,
+    lng_registrada: pos?.lng || null,
+  }).eq('id', paradaEnEdicion.id);
+
+  if(error){ msg.innerHTML = `<div class="msg msg-err">${error.message}</div>`; document.getElementById('btnConfirmar').disabled = false; return; }
+
+  paradaEnEdicion.estado = estadoElegido.valor;
+  volverALista();
+  renderLista();
+}
+
+document.getElementById('loginPass').addEventListener('keydown', (ev) => { if(ev.key === 'Enter') login(); });
+</script>
+</body>
+</html>
