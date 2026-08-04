@@ -180,7 +180,18 @@
   </div>
 
   <!-- ===================== CARGA ===================== -->
-  <div id="vistaCarga" class="hidden">
+  <!-- ===================== ARMADO DE ROUTING (Carga + Armado unificados) ===================== -->
+  <div id="vistaArmado" class="hidden">
+    <div class="card">
+      <h2>Datos del recorrido</h2>
+      <div class="card-body">
+        <div class="row2">
+          <div class="field"><label>Fecha</label><input id="a_fecha" type="date"></div>
+          <div class="field"><label>Operador que realiza el routing</label><select id="a_selectOperador"></select></div>
+        </div>
+      </div>
+    </div>
+
     <div class="card">
       <h2>Cargar envío</h2>
       <div class="card-body">
@@ -233,19 +244,7 @@
         </table>
       </div>
     </div>
-  </div>
 
-  <!-- ===================== ARMADO ===================== -->
-  <div id="vistaArmado" class="hidden">
-    <div class="card">
-      <h2>Datos del recorrido</h2>
-      <div class="card-body">
-        <div class="row2">
-          <div class="field"><label>Fecha</label><input id="a_fecha" type="date"></div>
-          <div class="field"><label>Operador asignado</label><select id="a_selectOperador"></select></div>
-        </div>
-      </div>
-    </div>
     <div class="grid2">
       <div class="card">
         <h2>Envíos pendientes de asignar</h2>
@@ -368,18 +367,17 @@ let sucursales = [], sucursalSeleccionada = null;
 let vistaActiva = null;
 
 const TODOS_LOS_TABS = [
-  { id:'carga', label:'Carga de envíos' },
   { id:'armado', label:'Armado de Routing' },
   { id:'operador', label:'Routing' },
   { id:'mapa', label:'Mapa en vivo' },
   { id:'dashboard', label:'Dashboard' },
 ];
 const TABS_POR_ROL = {
-  operador: ['carga','armado','operador'],
-  lider: ['carga','armado','operador','mapa','dashboard'],
-  supervisor: ['carga','armado','operador','mapa','dashboard'],
+  operador: ['armado','operador'],
+  lider: ['armado','operador','mapa','dashboard'],
+  supervisor: ['armado','operador','mapa','dashboard'],
 };
-const VISTA_INICIAL_POR_ROL = { operador:'operador', lider:'carga', supervisor:'carga' };
+const VISTA_INICIAL_POR_ROL = { operador:'operador', lider:'armado', supervisor:'armado' };
 
 async function login(){
   const usuario = document.getElementById('loginEmail').value.trim().toLowerCase();
@@ -445,16 +443,15 @@ async function cambiarSucursal(){
 
 async function mostrarVista(nombre){
   vistaActiva = nombre;
-  ['vistaCarga','vistaArmado','vistaMapaSup','vistaDashboard','vistaOperador'].forEach(id => document.getElementById(id).classList.add('hidden'));
-  const mapaIds = { carga:'vistaCarga', armado:'vistaArmado', mapa:'vistaMapaSup', dashboard:'vistaDashboard', operador:'vistaOperador' };
+  ['vistaArmado','vistaMapaSup','vistaDashboard','vistaOperador'].forEach(id => document.getElementById(id).classList.add('hidden'));
+  const mapaIds = { armado:'vistaArmado', mapa:'vistaMapaSup', dashboard:'vistaDashboard', operador:'vistaOperador' };
   document.getElementById(mapaIds[nombre]).classList.remove('hidden');
   document.querySelectorAll('#navTabs button').forEach(b => b.classList.toggle('active', b.dataset.vista === nombre));
   await refrescarVistaActiva();
 }
 
 async function refrescarVistaActiva(){
-  if(vistaActiva === 'carga') await c_cargarEnviosDelDia();
-  if(vistaActiva === 'armado'){ await a_cargarOperadores(); await a_cargarPendientes(); if(!document.getElementById('a_fecha').value) document.getElementById('a_fecha').valueAsDate = new Date(); }
+  if(vistaActiva === 'armado'){ await c_cargarEnviosDelDia(); await a_cargarOperadores(); await a_cargarPendientes(); if(!document.getElementById('a_fecha').value) document.getElementById('a_fecha').valueAsDate = new Date(); }
   if(vistaActiva === 'mapa') await m_cargarOperadoresActivos();
   if(vistaActiva === 'dashboard'){ if(!document.getElementById('d_fechaDesde').value){ const h=new Date(),h7=new Date(); h7.setDate(h.getDate()-7); document.getElementById('d_fechaHasta').valueAsDate=h; document.getElementById('d_fechaDesde').valueAsDate=h7; } await d_buscar(); }
   if(vistaActiva === 'operador') await o_arrancar();
@@ -551,12 +548,14 @@ async function c_agregarEnvio(){
   msg.innerHTML = `<div class="msg msg-ok">Envío agregado para ${c_clienteSeleccionado.nombre}.</div>`;
   c_quitarCliente();
   await c_cargarEnviosDelDia();
+  await a_cargarPendientes();
 }
 
 async function c_eliminarEnvio(id){
   if(!confirm('¿Eliminar este envío del lote?')) return;
   await client.from('envios').delete().eq('id', id);
   await c_cargarEnviosDelDia();
+  await a_cargarPendientes();
 }
 
 async function c_cargarEnviosDelDia(){
@@ -681,7 +680,7 @@ async function a_confirmarRecorrido(){
   const fecha = document.getElementById('a_fecha').value;
   if(!operadorId){ msg.innerHTML = `<div class="msg msg-err">Elegí un operador.</div>`; return; }
   if(a_ordenParadas.length === 0){ msg.innerHTML = `<div class="msg msg-err">Agregá al menos una parada.</div>`; return; }
-  const { data: recorrido, error: errRec } = await client.from('recorridos').insert({ sucursal_id: sucursalSeleccionada, operador_id: operadorId, fecha, estado:'planificado' }).select().single();
+  const { data: recorrido, error: errRec } = await client.from('recorridos').insert({ sucursal_id: sucursalSeleccionada, operador_id: operadorId, generado_por: usuarioActual.id, fecha, estado:'planificado' }).select().single();
   if(errRec){ msg.innerHTML = `<div class="msg msg-err">${errRec.message}</div>`; return; }
   for(let i=0;i<a_ordenParadas.length;i++){
     const p = a_ordenParadas[i];
@@ -693,16 +692,29 @@ async function a_confirmarRecorrido(){
       if(errUpd){ msg.innerHTML = `<div class="msg msg-err">${errUpd.message}</div>`; return; }
     }
   }
-  msg.innerHTML = `<div class="msg msg-ok">Recorrido confirmado con ${a_ordenParadas.length} paradas.</div>`;
-  a_generarRemito();
+  const totalBultosRecorrido = a_ordenParadas.reduce((s,p) => s + p.envios.reduce((s2,e)=>s2+e.cantidad_bultos,0), 0);
+  msg.innerHTML = `<div class="msg msg-ok">Recorrido Nº ${recorrido.numero_recorrido} confirmado — ${a_ordenParadas.length} clientes, ${totalBultosRecorrido} bultos.</div>`;
+  a_generarRemito(recorrido);
   a_ordenParadas = [];
   await a_cargarPendientes();
 }
 
-function a_generarRemito(){
+function a_generarRemito(recorrido){
   const cont = document.getElementById('a_remitoContenido'); cont.innerHTML = '';
+  const totalBultos = a_ordenParadas.reduce((s,p) => s + p.envios.reduce((s2,e)=>s2+e.cantidad_bultos,0), 0);
+  const resumen = document.createElement('div');
+  resumen.innerHTML = `
+    <div class="remito-cliente" style="background:var(--paper);">
+      <div class="remito-linea" style="border-top:none;"><span>Recorrido Nº</span><span><b>${recorrido.numero_recorrido}</b></span></div>
+      <div class="remito-linea"><span>Generado por</span><span>${perfilActual.nombre_completo}</span></div>
+      <div class="remito-linea"><span>Realiza</span><span>${document.getElementById('a_selectOperador').selectedOptions[0]?.textContent || ''}</span></div>
+      <div class="remito-linea"><span>Cantidad de clientes</span><span>${a_ordenParadas.length}</span></div>
+      <div class="remito-linea"><span>Cantidad de bultos</span><span>${totalBultos}</span></div>
+    </div>
+  `;
+  cont.appendChild(resumen);
   const soloEntregas = a_ordenParadas.filter(p => p.tipo === 'entrega');
-  if(soloEntregas.length === 0){ cont.innerHTML = '<p style="font-size:12.5px;color:var(--ink-soft);">Este recorrido no tiene envíos, solo visitas.</p>'; }
+  if(soloEntregas.length === 0){ const p2=document.createElement('p'); p2.style.cssText='font-size:12.5px;color:var(--ink-soft);'; p2.textContent='Este recorrido no tiene envíos, solo visitas.'; cont.appendChild(p2); }
   else {
     soloEntregas.forEach((p, i) => {
       const totalBultos = p.envios.reduce((s,e)=>s+e.cantidad_bultos,0);
