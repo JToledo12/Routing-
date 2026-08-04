@@ -337,6 +337,17 @@
       <div id="o_listaParadas"></div>
       <button id="o_btnFinalizar" class="btn-ghost hidden" style="width:100%;margin-top:10px;" onclick="o_finalizarRecorrido()">Finalizar recorrido</button>
       <div class="gps-note hidden" id="o_gpsNote"><span class="pulse"></span> Compartiendo ubicación en vivo</div>
+
+      <div class="card" style="margin-top:18px;">
+        <h2>Registrar algo no previsto</h2>
+        <div class="card-body">
+          <div id="o_impMsg"></div>
+          <div class="field"><label>Nº de pedido (si corresponde)</label><input id="o_impPedido" placeholder="Dejalo vacío si no aplica"></div>
+          <div class="field"><label>Detalle</label><input id="o_impDetalle" placeholder="Ej: recibí pago de Panadería San Martín"></div>
+          <button class="btn-primary" style="width:100%;" onclick="o_registrarImprevisto()">Registrar</button>
+          <div id="o_listaImprevistos" style="margin-top:12px;"></div>
+        </div>
+      </div>
     </div>
 
     <div id="o_vistaDetalle" class="hidden">
@@ -907,6 +918,7 @@ async function o_arrancar(){
   if(!recorridos || recorridos.length===0){ document.getElementById('o_vistaSinRecorrido').classList.remove('hidden'); return; }
   o_recorridoActual = recorridos[0];
   await o_cargarParadas();
+  await o_cargarImprevistos();
   document.getElementById('o_vistaLista').classList.remove('hidden');
   document.getElementById('o_progressTrack').classList.remove('hidden');
   if(o_recorridoActual.estado === 'en_curso') o_iniciarSeguimientoGPS();
@@ -1064,6 +1076,35 @@ async function o_confirmarParada(){
   o_paradaEnEdicion.estado = o_estadoElegido.valor;
   o_volverALista();
   o_renderLista();
+}
+
+async function o_registrarImprevisto(){
+  const pedido = document.getElementById('o_impPedido').value.trim();
+  const detalle = document.getElementById('o_impDetalle').value.trim();
+  const msg = document.getElementById('o_impMsg');
+  msg.innerHTML = '';
+  if(!detalle){ msg.innerHTML = `<div class="msg msg-err">El detalle es obligatorio.</div>`; return; }
+  const { error } = await client.from('registros_imprevistos').insert({
+    recorrido_id: o_recorridoActual.id, pedido: pedido || null, detalle, registrado_por: usuarioActual.id
+  });
+  if(error){ msg.innerHTML = `<div class="msg msg-err">${error.message}</div>`; return; }
+  document.getElementById('o_impPedido').value = '';
+  document.getElementById('o_impDetalle').value = '';
+  msg.innerHTML = `<div class="msg msg-ok">Registrado.</div>`;
+  await o_cargarImprevistos();
+}
+
+async function o_cargarImprevistos(){
+  const { data } = await client.from('registros_imprevistos').select('*').eq('recorrido_id', o_recorridoActual.id).order('registrado_en', { ascending:false });
+  const cont = document.getElementById('o_listaImprevistos');
+  cont.innerHTML = '';
+  (data||[]).forEach(r => {
+    const hora = new Date(r.registrado_en).toLocaleTimeString('es-AR', { hour:'2-digit', minute:'2-digit' });
+    const div = document.createElement('div');
+    div.style.cssText = 'padding:8px 0;border-top:1px dashed var(--line);font-size:12.5px;';
+    div.innerHTML = `<b>${hora}</b>${r.pedido ? ' · Pedido '+r.pedido : ''} — ${r.detalle}`;
+    cont.appendChild(div);
+  });
 }
 </script>
 </body>
