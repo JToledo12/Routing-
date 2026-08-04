@@ -173,7 +173,7 @@
       <h3>Vitolen Reparto</h3>
       <p class="hint">Iniciá sesión con tu usuario</p>
       <div id="loginMsg"></div>
-      <div class="field" style="text-align:left;"><label>Email</label><input id="loginEmail" type="text"></div>
+      <div class="field" style="text-align:left;"><label>Usuario</label><input id="loginEmail" type="text" autocapitalize="off"></div>
       <div class="field" style="text-align:left;"><label>Contraseña</label><input id="loginPass" type="password"></div>
       <button class="btn-primary" style="width:100%" onclick="login()">Ingresar</button>
     </div>
@@ -367,20 +367,29 @@ let usuarioActual = null, perfilActual = null;
 let sucursales = [], sucursalSeleccionada = null;
 let vistaActiva = null;
 
-const TABS_ADMIN = [
+const TODOS_LOS_TABS = [
   { id:'carga', label:'Carga de envíos' },
-  { id:'armado', label:'Armar recorrido' },
+  { id:'armado', label:'Armado de Routing' },
+  { id:'operador', label:'Routing' },
   { id:'mapa', label:'Mapa en vivo' },
   { id:'dashboard', label:'Dashboard' },
 ];
+const TABS_POR_ROL = {
+  operador: ['carga','armado','operador'],
+  lider: ['carga','armado','operador','mapa','dashboard'],
+  supervisor: ['carga','armado','operador','mapa','dashboard'],
+};
+const VISTA_INICIAL_POR_ROL = { operador:'operador', lider:'carga', supervisor:'carga' };
 
 async function login(){
-  const email = document.getElementById('loginEmail').value.trim();
+  const usuario = document.getElementById('loginEmail').value.trim().toLowerCase();
   const pass = document.getElementById('loginPass').value;
   const msg = document.getElementById('loginMsg');
   msg.innerHTML = '';
-  const { data, error } = await client.auth.signInWithPassword({ email, password: pass });
-  if(error){ msg.innerHTML = `<div class="msg msg-err">${error.message}</div>`; return; }
+  if(!usuario){ msg.innerHTML = `<div class="msg msg-err">Ingresá tu usuario.</div>`; return; }
+  const emailInterno = `${usuario}@vitolen.local`;
+  const { data, error } = await client.auth.signInWithPassword({ email: emailInterno, password: pass });
+  if(error){ msg.innerHTML = `<div class="msg msg-err">Usuario o contraseña incorrectos.</div>`; return; }
   usuarioActual = data.user;
   await arrancarSesion();
 }
@@ -400,7 +409,7 @@ async function arrancarSesion(){
 
   const selector = document.getElementById('selectSucursal');
   selector.innerHTML = '';
-  if(perfilActual.rol === 'admin'){
+  if(perfilActual.rol === 'supervisor'){
     sucursales.forEach(s => { const o=document.createElement('option'); o.value=s.id; o.textContent=s.nombre; selector.appendChild(o); });
     selector.disabled = false;
     sucursalSeleccionada = sucursales.find(s => s.id === perfilActual.sucursal_id)?.id || sucursales[0]?.id;
@@ -416,22 +425,17 @@ async function arrancarSesion(){
   document.getElementById('vistaLogin').classList.add('hidden');
   document.getElementById('siteHeader').classList.remove('hidden');
 
-  if(perfilActual.rol === 'operador'){
-    document.getElementById('headerSucursal').classList.add('hidden');
-    document.getElementById('navTabs').innerHTML = '';
-    await mostrarVista('operador');
-  } else {
-    document.getElementById('headerSucursal').classList.remove('hidden');
-    const nav = document.getElementById('navTabs');
-    nav.innerHTML = '';
-    TABS_ADMIN.forEach(t => {
-      const b = document.createElement('button');
-      b.textContent = t.label; b.dataset.vista = t.id;
-      b.onclick = () => mostrarVista(t.id);
-      nav.appendChild(b);
-    });
-    await mostrarVista('carga');
-  }
+  document.getElementById('headerSucursal').classList.remove('hidden');
+  const nav = document.getElementById('navTabs');
+  nav.innerHTML = '';
+  const idsVisibles = TABS_POR_ROL[perfilActual.rol] || [];
+  TODOS_LOS_TABS.filter(t => idsVisibles.includes(t.id)).forEach(t => {
+    const b = document.createElement('button');
+    b.textContent = t.label; b.dataset.vista = t.id;
+    b.onclick = () => mostrarVista(t.id);
+    nav.appendChild(b);
+  });
+  await mostrarVista(VISTA_INICIAL_POR_ROL[perfilActual.rol] || idsVisibles[0]);
 }
 
 async function cambiarSucursal(){
