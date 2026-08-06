@@ -457,13 +457,17 @@ async function cambiarSucursal(){
   await refrescarVistaActiva();
 }
 
+let m_intervaloLista = null;
+
 async function mostrarVista(nombre){
   vistaActiva = nombre;
+  if(m_intervaloLista){ clearInterval(m_intervaloLista); m_intervaloLista = null; }
   ['vistaArmado','vistaMapaSup','vistaDashboard','vistaOperador'].forEach(id => document.getElementById(id).classList.add('hidden'));
   const mapaIds = { armado:'vistaArmado', mapa:'vistaMapaSup', dashboard:'vistaDashboard', operador:'vistaOperador' };
   document.getElementById(mapaIds[nombre]).classList.remove('hidden');
   document.querySelectorAll('#navTabs button').forEach(b => b.classList.toggle('active', b.dataset.vista === nombre));
   await refrescarVistaActiva();
+  if(nombre === 'mapa'){ m_intervaloLista = setInterval(m_cargarOperadoresActivos, 20000); }
 }
 
 async function refrescarVistaActiva(){
@@ -776,8 +780,20 @@ async function m_cargarOperadoresActivos(){
   for(const r of m_recorridosActivos){
     const { data: paradasR } = await client.from('paradas').select('estado').eq('recorrido_id', r.id);
     const total = paradasR?.length||0, resueltas = paradasR?.filter(p=>p.estado!=='pendiente').length||0;
+    const pct = total > 0 ? Math.round((resueltas/total)*100) : 0;
+    let tiempo = '—';
+    if(r.iniciado_en){
+      const mins = Math.round((Date.now() - new Date(r.iniciado_en).getTime()) / 60000);
+      tiempo = `${Math.floor(mins/60)}h ${mins%60}m`;
+    }
     const div = document.createElement('div'); div.className = 'op-row' + (r.id===m_recorridoSeleccionadoId?' active':'');
-    div.innerHTML = `<div class="op-dot"></div><div><div class="op-name">${r.perfiles?.nombre_completo||'—'}</div><div class="op-meta">Parada ${resueltas}/${total}</div></div>`;
+    div.innerHTML = `
+      <div class="op-dot"></div>
+      <div style="flex:1;">
+        <div class="op-name">Nº ${r.numero_recorrido} · ${r.perfiles?.nombre_completo||'—'}</div>
+        <div class="op-meta">${resueltas}/${total} paradas (${pct}%) · ${tiempo}</div>
+      </div>
+    `;
     div.onclick = () => m_seleccionarRecorrido(r.id);
     cont.appendChild(div);
   }
