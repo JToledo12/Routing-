@@ -334,6 +334,10 @@
     <div id="o_vistaLista" class="hidden">
       <div id="o_listaMsg"></div>
       <button id="o_btnIniciar" class="btn-primary hidden" style="width:100%;margin-bottom:14px;" onclick="o_iniciarRecorrido()">Iniciar recorrido</button>
+      <button class="btn-ghost" style="width:100%;margin-bottom:14px;" onclick="o_toggleMapa()">Ver mapa de paradas</button>
+      <div id="o_mapaWrap" class="hidden" style="margin-bottom:14px;">
+        <div id="o_mapa" style="height:280px;border-radius:10px;border:1px solid var(--line);"></div>
+      </div>
       <div id="o_listaParadas"></div>
       <button id="o_btnFinalizar" class="btn-ghost hidden" style="width:100%;margin-top:10px;" onclick="o_finalizarRecorrido()">Finalizar recorrido</button>
       <div class="gps-note hidden" id="o_gpsNote"><span class="pulse"></span> Compartiendo ubicación en vivo</div>
@@ -542,7 +546,18 @@ async function c_crearCliente(){
   const telefono = document.getElementById('c_nuevoTelefono').value.trim();
   const msg = document.getElementById('c_msg');
   if(!nombre){ msg.innerHTML = `<div class="msg msg-err">El nombre es obligatorio.</div>`; return; }
-  const { data, error } = await client.from('clientes').insert({ nombre, direccion: direccion||null, telefono: telefono||null, sucursal_id: sucursalSeleccionada, creado_por: usuarioActual.id }).select().single();
+
+  let lat = null, lng = null;
+  if(direccion){
+    try{
+      const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=ar&q=${encodeURIComponent(direccion + ', Argentina')}`;
+      const res = await fetch(url, { headers: { 'Accept-Language': 'es' } });
+      const geo = await res.json();
+      if(geo && geo.length > 0){ lat = parseFloat(geo[0].lat); lng = parseFloat(geo[0].lon); }
+    }catch(e){ /* si falla, el cliente se crea igual sin coordenadas */ }
+  }
+
+  const { data, error } = await client.from('clientes').insert({ nombre, direccion: direccion||null, telefono: telefono||null, lat, lng, sucursal_id: sucursalSeleccionada, creado_por: usuarioActual.id }).select().single();
   if(error){ msg.innerHTML = `<div class="msg msg-err">${error.message}</div>`; return; }
   msg.innerHTML = '';
   document.getElementById('c_bloqueClienteNuevo').classList.add('hidden');
@@ -925,7 +940,7 @@ async function o_arrancar(){
 }
 
 async function o_cargarParadas(){
-  const { data, error } = await client.from('paradas').select('*, clientes(nombre, direccion)').eq('recorrido_id', o_recorridoActual.id).order('orden');
+  const { data, error } = await client.from('paradas').select('*, clientes(nombre, direccion, lat, lng)').eq('recorrido_id', o_recorridoActual.id).order('orden');
   if(error){ document.getElementById('o_listaMsg').innerHTML = `<div class="msg msg-err">${error.message}</div>`; return; }
   o_paradas = [];
   for(const p of data){
@@ -958,6 +973,7 @@ function o_renderLista(){
   document.getElementById('o_btnIniciar').classList.toggle('hidden', o_recorridoActual.estado !== 'planificado');
   document.getElementById('o_btnFinalizar').classList.toggle('hidden', !(o_recorridoActual.estado==='en_curso' && resueltas===o_paradas.length && o_paradas.length>0));
   document.getElementById('o_gpsNote').classList.toggle('hidden', o_recorridoActual.estado !== 'en_curso');
+  if(o_mapa && !document.getElementById('o_mapaWrap').classList.contains('hidden')) o_pintarMapa();
 }
 
 async function o_iniciarRecorrido(){
@@ -985,6 +1001,7 @@ function o_iniciarSeguimientoGPS(){
     if(!o_ultimaPos || o_distanciaMetros(o_ultimaPos, actual) >= 15){
       o_ultimaPos = actual;
       await client.from('posiciones').insert({ recorrido_id: o_recorridoActual.id, lat: actual.lat, lng: actual.lng });
+      if(o_mapa && !document.getElementById('o_mapaWrap').classList.contains('hidden')) o_pintarMapa();
     }
   }, (err) => console.warn('GPS:', err.message), { enableHighAccuracy:true, maximumAge:5000 });
   document.getElementById('o_gpsNote').classList.remove('hidden');
@@ -1047,6 +1064,42 @@ function o_limpiarFirma(){
 }
 
 function o_volverALista(){ document.getElementById('o_vistaDetalle').classList.add('hidden'); document.getElementById('o_vistaLista').classList.remove('hidden'); }
+
+let o_mapa = null, o_marcadoresMapa = [], o_marcadorPropio = null;
+
+function o_toggleMapa(){
+  const wrap = document.getElementById('o_mapaWrap');
+  wrap.classList.toggle('hidden');
+  if(wrap.classList.contains('hidden')) return;
+  if(!o_mapa){
+    o_mapa = L.map('o_mapa').setView([-32.9468,-60.6393], 13);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution:'&copy; OpenStreetMap contributors' }).addTo(o_mapa);
+  }
+  setTimeout(() => { o_mapa.invalidateSize(); o_pintarMapa(); }, 50);
+}
+
+function o_pintarMapa(){
+  if(!o_mapa) return;
+  o_marcadoresMapa.forEach(m => o_mapa.removeLayer(m));
+  o_marcadoresMapa = [];
+  const bounds = [];
+  o_paradas.forEach(p => {
+    if(p.clientes?.lat && p.clientes?.lng){
+      const color = COLOR_ESTADO[p.estado] || '#0097A7';
+      const m = L.circleMarker([p.clientes.lat, p.clientes.lng], { radius:8, color:'#fff', weight:2, fillColor:color, fillOpacity:1 })
+        .bindTooltip(`${p.orden}. ${p.clientes?.nombre||''}`)
+        .addTo(o_mapa);
+      o_marcadoresMapa.push(m);
+      bounds.push([p.clientes.lat, p.clientes.lng]);
+    }
+  });
+  if(o_ultimaPos){
+    if(o_marcadorPropio) o_mapa.removeLayer(o_marcadorPropio);
+    o_marcadorPropio = L.circleMarker([o_ultimaPos.lat, o_ultimaPos.lng], { radius:9, color:'#fff', weight:2, fillColor:'#E8262A', fillOpacity:1 }).bindTooltip('Vos').addTo(o_mapa);
+    bounds.push([o_ultimaPos.lat, o_ultimaPos.lng]);
+  }
+  if(bounds.length > 0) o_mapa.fitBounds(bounds, { padding:[24,24] });
+}
 
 function o_obtenerPosicionActual(){
   return new Promise((resolve) => {
