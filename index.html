@@ -306,13 +306,20 @@
         </div>
       </div>
     </div>
+    <div class="card" id="d_cardResumen">
+      <h2>Resumen del período</h2>
+      <div class="card-body" id="d_resumenContenido" style="display:grid;grid-template-columns:repeat(5,1fr);gap:14px;"></div>
+    </div>
+
     <div class="card">
       <h2>Recorridos <span class="badge badge-dim" id="d_contadorRecorridos">0</span></h2>
       <div id="d_tablaMsg" style="padding:0 18px;"></div>
+      <div style="overflow-x:auto;">
       <table>
-        <thead><tr><th>Fecha</th><th>Operador</th><th>Inicio</th><th>Fin</th><th>Duración</th><th>Entregados</th><th>No entreg.</th><th>Visitados</th><th>Estado</th></tr></thead>
+        <thead><tr><th>Nº</th><th>Fecha</th><th>Generado por</th><th>Realiza</th><th>Clientes</th><th>Bultos</th><th>Inicio</th><th>Fin</th><th>Duración</th><th>Entreg.</th><th>No entreg.</th><th>Visit.</th><th>Estado</th></tr></thead>
         <tbody id="d_tablaRecorridos"></tbody>
       </table>
+      </div>
     </div>
     <div class="card hidden" id="d_cardReplay">
       <h2><span id="d_tituloReplay"></span><button class="btn-ghost btn-small" onclick="d_cerrarReplay()">Cerrar</button></h2>
@@ -884,7 +891,12 @@ async function d_buscar(){
     const badgeEstado = r.estado==='finalizado' ? 'badge-ok' : r.estado==='en_curso' ? 'badge-warn' : 'badge-dim';
     const tr = document.createElement('tr'); tr.className = 'fila-click';
     tr.innerHTML = `
-      <td>${r.fecha}</td><td>${r.operador_nombre}</td>
+      <td style="font-family:var(--mono);">${r.numero_recorrido}</td>
+      <td>${r.fecha}</td>
+      <td>${r.generado_por_nombre || '—'}</td>
+      <td>${r.operador_nombre}</td>
+      <td>${r.total_paradas}</td>
+      <td>${r.total_bultos}</td>
       <td style="font-family:var(--mono);font-size:11.5px;">${inicio?inicio.toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'}):'—'}</td>
       <td style="font-family:var(--mono);font-size:11.5px;">${fin?fin.toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'}):'—'}</td>
       <td style="font-family:var(--mono);font-size:11.5px;">${duracion}</td>
@@ -896,11 +908,48 @@ async function d_buscar(){
     tr.onclick = () => d_abrirReplay(r);
     tbody.appendChild(tr);
   });
+  d_renderResumen(data);
+}
+
+function d_renderResumen(data){
+  const cont = document.getElementById('d_resumenContenido');
+  if(!data || data.length === 0){ cont.innerHTML = '<p style="font-size:12.5px;color:var(--ink-soft);">Sin datos en el período elegido.</p>'; return; }
+
+  const totalRoutings = data.length;
+  const promClientes = (data.reduce((s,r)=>s+r.total_paradas,0) / totalRoutings).toFixed(1);
+  const promBultos = (data.reduce((s,r)=>s+r.total_bultos,0) / totalRoutings).toFixed(1);
+
+  const conDuracion = data.filter(r => r.iniciado_en && r.finalizado_en);
+  let promTiempo = '—';
+  if(conDuracion.length > 0){
+    const totalMins = conDuracion.reduce((s,r) => s + (new Date(r.finalizado_en)-new Date(r.iniciado_en))/60000, 0);
+    const mins = Math.round(totalMins / conDuracion.length);
+    promTiempo = `${Math.floor(mins/60)}h ${mins%60}m`;
+  }
+
+  const totalEntregados = data.reduce((s,r)=>s+r.entregados,0);
+  const totalNoEntregados = data.reduce((s,r)=>s+r.no_entregados,0);
+  const totalIntentos = totalEntregados + totalNoEntregados;
+  const efectividad = totalIntentos > 0 ? Math.round((totalEntregados/totalIntentos)*100) : 0;
+
+  const items = [
+    { label:'Routings realizados', valor: totalRoutings },
+    { label:'Prom. clientes / routing', valor: promClientes },
+    { label:'Prom. bultos / routing', valor: promBultos },
+    { label:'Tiempo promedio', valor: promTiempo },
+    { label:'Efectividad de entrega', valor: efectividad + '%' },
+  ];
+  cont.innerHTML = items.map(it => `
+    <div>
+      <div style="font-family:var(--mono);font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-soft);margin-bottom:4px;">${it.label}</div>
+      <div style="font-size:22px;font-weight:700;">${it.valor}</div>
+    </div>
+  `).join('');
 }
 
 async function d_abrirReplay(r){
   document.getElementById('d_cardReplay').classList.remove('hidden');
-  document.getElementById('d_tituloReplay').textContent = `Recorrido de ${r.operador_nombre} — ${r.fecha}`;
+  document.getElementById('d_tituloReplay').textContent = `Recorrido Nº ${r.numero_recorrido} — ${r.operador_nombre} — ${r.fecha}`;
   document.getElementById('d_cardReplay').scrollIntoView({ behavior:'smooth' });
   if(!d_mapa){ d_mapa = L.map('d_mapaReplay'); L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution:'&copy; OpenStreetMap contributors' }).addTo(d_mapa); }
   d_capas.forEach(c => d_mapa.removeLayer(c)); d_capas = [];
