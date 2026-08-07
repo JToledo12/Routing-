@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Vitolen · Reparto</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -312,7 +313,7 @@
     </div>
 
     <div class="card">
-      <h2>Recorridos <span class="badge badge-dim" id="d_contadorRecorridos">0</span></h2>
+      <h2>Recorridos <span class="badge badge-dim" id="d_contadorRecorridos">0</span><button class="btn-ghost btn-small" onclick="d_exportarExcel()">Exportar a Excel</button></h2>
       <div id="d_tablaMsg" style="padding:0 18px;"></div>
       <div style="overflow-x:auto;">
       <table>
@@ -871,7 +872,7 @@ async function m_cargarParadasSup(){
 // =====================================================================
 // DASHBOARD
 // =====================================================================
-let d_mapa = null, d_capas = [];
+let d_mapa = null, d_capas = [], d_ultimoResultado = [];
 
 async function d_buscar(){
   const desde = document.getElementById('d_fechaDesde').value;
@@ -881,6 +882,7 @@ async function d_buscar(){
 
   const { data, error } = await client.from('vista_resumen_recorridos').select('*').eq('sucursal_id', sucursalSeleccionada).gte('fecha', desde).lte('fecha', hasta).order('fecha',{ascending:false});
   if(error){ msg.innerHTML = `<div class="msg msg-err">${error.message}</div>`; return; }
+  d_ultimoResultado = data;
   document.getElementById('d_contadorRecorridos').textContent = data.length;
   data.forEach(r => {
     const inicio = r.iniciado_en ? new Date(r.iniciado_en) : null;
@@ -988,6 +990,43 @@ async function d_abrirReplay(r){
   }
 }
 function d_cerrarReplay(){ document.getElementById('d_cardReplay').classList.add('hidden'); }
+
+function d_exportarExcel(){
+  if(!d_ultimoResultado || d_ultimoResultado.length === 0){ alert('No hay datos para exportar. Hacé una búsqueda primero.'); return; }
+
+  const filas = d_ultimoResultado.map(r => {
+    const inicio = r.iniciado_en ? new Date(r.iniciado_en) : null;
+    const fin = r.finalizado_en ? new Date(r.finalizado_en) : null;
+    let duracionMin = '';
+    if(inicio && fin) duracionMin = Math.round((fin-inicio)/60000);
+    return {
+      'Nº Recorrido': r.numero_recorrido,
+      'Fecha': r.fecha,
+      'Sucursal': r.sucursal_nombre,
+      'Generado por': r.generado_por_nombre || '',
+      'Realiza': r.operador_nombre,
+      'Cantidad de clientes': r.total_paradas,
+      'Cantidad de bultos': r.total_bultos,
+      'Hora inicio': inicio ? inicio.toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'}) : '',
+      'Hora fin': fin ? fin.toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'}) : '',
+      'Duración (min)': duracionMin,
+      'Entregados': r.entregados,
+      'No entregados': r.no_entregados,
+      'Visitados': r.visitados,
+      'Pendientes': r.pendientes,
+      'Estado': r.estado,
+    };
+  });
+
+  const hoja = XLSX.utils.json_to_sheet(filas);
+  hoja['!cols'] = Object.keys(filas[0]).map(k => ({ wch: Math.max(k.length, 14) }));
+  const libro = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(libro, hoja, 'Recorridos');
+
+  const desde = document.getElementById('d_fechaDesde').value;
+  const hasta = document.getElementById('d_fechaHasta').value;
+  XLSX.writeFile(libro, `recorridos_${desde}_a_${hasta}.xlsx`);
+}
 
 // =====================================================================
 // APP DEL OPERADOR
