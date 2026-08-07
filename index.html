@@ -313,7 +313,7 @@
     </div>
 
     <div class="card">
-      <h2>Recorridos <span class="badge badge-dim" id="d_contadorRecorridos">0</span><button class="btn-ghost btn-small" onclick="d_exportarExcel()">Exportar a Excel</button></h2>
+      <h2>Recorridos <span class="badge badge-dim" id="d_contadorRecorridos">0</span><span style="display:flex;gap:8px;"><button class="btn-ghost btn-small" onclick="d_exportarExcel()">Exportar a Excel</button><button class="btn-ghost btn-small" onclick="d_exportarDetalle()">Exportar detalle</button></span></h2>
       <div id="d_tablaMsg" style="padding:0 18px;"></div>
       <div style="overflow-x:auto;">
       <table>
@@ -990,6 +990,52 @@ async function d_abrirReplay(r){
   }
 }
 function d_cerrarReplay(){ document.getElementById('d_cardReplay').classList.add('hidden'); }
+
+async function d_exportarDetalle(){
+  if(!d_ultimoResultado || d_ultimoResultado.length === 0){ alert('No hay datos para exportar. Hacé una búsqueda primero.'); return; }
+
+  const filas = [];
+  for(const r of d_ultimoResultado){
+    const { data: paradas } = await client.from('paradas').select('*, clientes(nombre, direccion)').eq('recorrido_id', r.id).order('orden');
+    for(const p of (paradas || [])){
+      if(p.tipo === 'entrega'){
+        const { data: envios } = await client.from('envios').select('*').eq('parada_id', p.id);
+        if(envios && envios.length > 0){
+          envios.forEach(e => {
+            filas.push({
+              'Nº Recorrido': r.numero_recorrido,
+              'Fecha': r.fecha,
+              'Realiza': r.operador_nombre,
+              'Orden parada': p.orden,
+              'Cliente': p.clientes?.nombre || '',
+              'Dirección': p.clientes?.direccion || '',
+              'Tipo parada': 'Entrega',
+              'Estado parada': p.estado,
+              'Referencia pedido': e.referencia,
+              'Tipo movimiento': e.tipo_movimiento === 'retiro' ? 'Retiro' : 'Entrega',
+              'Bultos': e.cantidad_bultos,
+            });
+          });
+        } else {
+          filas.push({ 'Nº Recorrido': r.numero_recorrido, 'Fecha': r.fecha, 'Realiza': r.operador_nombre, 'Orden parada': p.orden, 'Cliente': p.clientes?.nombre||'', 'Dirección': p.clientes?.direccion||'', 'Tipo parada':'Entrega', 'Estado parada': p.estado, 'Referencia pedido':'', 'Tipo movimiento':'', 'Bultos':'' });
+        }
+      } else {
+        filas.push({ 'Nº Recorrido': r.numero_recorrido, 'Fecha': r.fecha, 'Realiza': r.operador_nombre, 'Orden parada': p.orden, 'Cliente': p.clientes?.nombre||'', 'Dirección': p.clientes?.direccion||'', 'Tipo parada':'Visita', 'Estado parada': p.estado, 'Referencia pedido':'', 'Tipo movimiento':'', 'Bultos':'' });
+      }
+    }
+  }
+
+  if(filas.length === 0){ alert('No hay paradas para exportar en el período elegido.'); return; }
+
+  const hoja = XLSX.utils.json_to_sheet(filas);
+  hoja['!cols'] = Object.keys(filas[0]).map(k => ({ wch: Math.max(k.length, 14) }));
+  const libro = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(libro, hoja, 'Detalle');
+
+  const desde = document.getElementById('d_fechaDesde').value;
+  const hasta = document.getElementById('d_fechaHasta').value;
+  XLSX.writeFile(libro, `detalle_recorridos_${desde}_a_${hasta}.xlsx`);
+}
 
 function d_exportarExcel(){
   if(!d_ultimoResultado || d_ultimoResultado.length === 0){ alert('No hay datos para exportar. Hacé una búsqueda primero.'); return; }
