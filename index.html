@@ -378,6 +378,76 @@
     </div>
   </div>
 
+  <!-- ===================== BASE DE DATOS (solo supervisor) ===================== -->
+  <div id="vistaBaseDatos" class="hidden">
+
+    <div class="card">
+      <h2>Sucursales</h2>
+      <div class="card-body">
+        <table style="margin-bottom:14px;"><thead><tr><th>Nombre</th></tr></thead><tbody id="bd_tablaSucursales"></tbody></table>
+        <div id="bd_sucMsg"></div>
+        <div class="row2">
+          <div class="field" style="margin-bottom:0;"><label>Nueva sucursal</label><input id="bd_nuevaSucursal" placeholder="Nombre de la sucursal"></div>
+          <div style="display:flex;align-items:end;"><button class="btn-primary" style="width:100%;" onclick="bd_crearSucursal()">Crear sucursal</button></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Usuarios</h2>
+      <div class="card-body">
+        <div id="bd_usrMsg"></div>
+        <table style="margin-bottom:18px;">
+          <thead><tr><th>Nombre</th><th>Usuario</th><th>Sucursal</th><th>Rol</th><th></th></tr></thead>
+          <tbody id="bd_tablaUsuarios"></tbody>
+        </table>
+        <div class="section-label">Crear usuario nuevo</div>
+        <div id="bd_crearUsrMsg"></div>
+        <div class="row2">
+          <div class="field"><label>Nombre completo</label><input id="bd_nuevoNombreCompleto"></div>
+          <div class="field"><label>Usuario (login)</label><input id="bd_nuevoUsuario" placeholder="ej: mgomez" autocapitalize="off"></div>
+        </div>
+        <div class="row2">
+          <div class="field"><label>Contraseña</label><input id="bd_nuevaPass" type="password"></div>
+          <div class="field"><label>Rol</label>
+            <select id="bd_nuevoRol"><option value="operador">Operador</option><option value="lider">Líder</option></select>
+          </div>
+        </div>
+        <div class="field"><label>Sucursal</label><select id="bd_nuevoUsrSucursal"></select></div>
+        <button class="btn-primary" onclick="bd_crearUsuario()">Crear usuario</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Clientes</h2>
+      <div class="card-body">
+        <div class="field autocomplete">
+          <label>Buscar cliente para editar</label>
+          <input id="bd_buscarCliente" placeholder="Nombre del cliente…" oninput="bd_buscarClientes()" autocomplete="off">
+          <div id="bd_sugerencias" class="suggestions hidden"></div>
+        </div>
+        <div id="bd_editarClienteMsg"></div>
+        <div id="bd_bloqueEditarCliente" class="hidden">
+          <div class="field"><label>Nombre</label><input id="bd_editNombre"></div>
+          <div class="row2">
+            <div class="field"><label>Dirección</label><input id="bd_editDireccion"></div>
+            <div class="field"><label>Teléfono</label><input id="bd_editTelefono"></div>
+          </div>
+          <p style="font-size:11.5px;color:var(--ink-soft);">Si cambiás la dirección, se vuelve a calcular la ubicación en el mapa automáticamente.</p>
+          <button class="btn-primary" onclick="bd_guardarCliente()">Guardar cambios</button>
+        </div>
+
+        <div class="section-label">Carga masiva por CSV</div>
+        <p style="font-size:12px;color:var(--ink-soft);margin-top:0;">El archivo debe tener columnas llamadas <b>nombre</b>, <b>direccion</b> y <b>telefono</b> (esta última opcional).</p>
+        <div id="bd_csvMsg"></div>
+        <input id="bd_archivoCsv" type="file" accept=".csv,.xlsx,.xls" style="margin-bottom:10px;">
+        <div class="bar-track" style="height:6px;background:var(--paper-dim);border-radius:4px;overflow:hidden;margin-bottom:10px;"><div id="bd_csvBarra" style="height:100%;width:0%;background:var(--teal);"></div></div>
+        <button class="btn-primary" onclick="bd_importarCsv()">Importar clientes</button>
+      </div>
+    </div>
+
+  </div>
+
 </main>
 
 <script>
@@ -395,11 +465,12 @@ const TODOS_LOS_TABS = [
   { id:'operador', label:'Routing' },
   { id:'mapa', label:'Mapa en vivo' },
   { id:'dashboard', label:'Dashboard' },
+  { id:'basedatos', label:'Base de datos' },
 ];
 const TABS_POR_ROL = {
   operador: ['armado','operador'],
   lider: ['armado','operador','mapa','dashboard'],
-  supervisor: ['armado','operador','mapa','dashboard'],
+  supervisor: ['armado','operador','mapa','dashboard','basedatos'],
 };
 const VISTA_INICIAL_POR_ROL = { operador:'operador', lider:'armado', supervisor:'armado' };
 
@@ -470,8 +541,8 @@ let m_intervaloLista = null;
 async function mostrarVista(nombre){
   vistaActiva = nombre;
   if(m_intervaloLista){ clearInterval(m_intervaloLista); m_intervaloLista = null; }
-  ['vistaArmado','vistaMapaSup','vistaDashboard','vistaOperador'].forEach(id => document.getElementById(id).classList.add('hidden'));
-  const mapaIds = { armado:'vistaArmado', mapa:'vistaMapaSup', dashboard:'vistaDashboard', operador:'vistaOperador' };
+  ['vistaArmado','vistaMapaSup','vistaDashboard','vistaOperador','vistaBaseDatos'].forEach(id => document.getElementById(id).classList.add('hidden'));
+  const mapaIds = { armado:'vistaArmado', mapa:'vistaMapaSup', dashboard:'vistaDashboard', operador:'vistaOperador', basedatos:'vistaBaseDatos' };
   document.getElementById(mapaIds[nombre]).classList.remove('hidden');
   document.querySelectorAll('#navTabs button').forEach(b => b.classList.toggle('active', b.dataset.vista === nombre));
   await refrescarVistaActiva();
@@ -483,6 +554,7 @@ async function refrescarVistaActiva(){
   if(vistaActiva === 'mapa') await m_cargarOperadoresActivos();
   if(vistaActiva === 'dashboard'){ if(!document.getElementById('d_fechaDesde').value){ const h=new Date(),h7=new Date(); h7.setDate(h.getDate()-7); document.getElementById('d_fechaHasta').valueAsDate=h; document.getElementById('d_fechaDesde').valueAsDate=h7; } await d_buscar(); }
   if(vistaActiva === 'operador') await o_arrancar();
+  if(vistaActiva === 'basedatos'){ await bd_cargarSucursales(); await bd_cargarUsuarios(); }
 }
 
 document.getElementById('loginPass').addEventListener('keydown', (ev) => { if(ev.key === 'Enter') login(); });
@@ -1338,6 +1410,189 @@ async function o_cargarImprevistos(){
     div.innerHTML = `<b>${hora}</b>${r.pedido ? ' · Pedido '+r.pedido : ''} — ${r.detalle}`;
     cont.appendChild(div);
   });
+}
+// =====================================================================
+// BASE DE DATOS (solo supervisor)
+// =====================================================================
+
+async function bd_cargarSucursales(){
+  const { data } = await client.from('sucursales').select('*').order('nombre');
+  const tbody = document.getElementById('bd_tablaSucursales'); tbody.innerHTML = '';
+  (data||[]).forEach(s => { const tr=document.createElement('tr'); tr.innerHTML = `<td>${s.nombre}</td>`; tbody.appendChild(tr); });
+
+  const selUsr = document.getElementById('bd_nuevoUsrSucursal'); selUsr.innerHTML = '';
+  (data||[]).forEach(s => { const o=document.createElement('option'); o.value=s.id; o.textContent=s.nombre; selUsr.appendChild(o); });
+}
+
+async function bd_crearSucursal(){
+  const nombre = document.getElementById('bd_nuevaSucursal').value.trim();
+  const msg = document.getElementById('bd_sucMsg');
+  if(!nombre){ msg.innerHTML = `<div class="msg msg-err">Poné un nombre.</div>`; return; }
+  const { error } = await client.from('sucursales').insert({ nombre });
+  if(error){ msg.innerHTML = `<div class="msg msg-err">${error.message}</div>`; return; }
+  document.getElementById('bd_nuevaSucursal').value = '';
+  msg.innerHTML = `<div class="msg msg-ok">Sucursal creada.</div>`;
+  await bd_cargarSucursales();
+}
+
+async function bd_cargarUsuarios(){
+  const { data } = await client.from('perfiles').select('*, sucursales(nombre)').order('nombre_completo');
+  const tbody = document.getElementById('bd_tablaUsuarios'); tbody.innerHTML = '';
+  (data||[]).forEach(u => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${u.nombre_completo}</td>
+      <td style="font-family:var(--mono);font-size:11.5px;">${u.usuario||'—'}</td>
+      <td>${u.sucursales?.nombre||'—'}</td>
+      <td>
+        <select id="bd_rol_${u.id}" style="width:auto;padding:5px 8px;font-size:12px;">
+          <option value="operador" ${u.rol==='operador'?'selected':''}>Operador</option>
+          <option value="lider" ${u.rol==='lider'?'selected':''}>Líder</option>
+          <option value="supervisor" ${u.rol==='supervisor'?'selected':''}>Supervisor</option>
+        </select>
+      </td>
+      <td><button class="btn-ghost btn-small" onclick="bd_cambiarRol('${u.id}')">Guardar</button></td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+async function bd_cambiarRol(userId){
+  const nuevoRol = document.getElementById('bd_rol_'+userId).value;
+  const msg = document.getElementById('bd_usrMsg');
+  const { error } = await client.from('perfiles').update({ rol: nuevoRol }).eq('id', userId);
+  if(error){ msg.innerHTML = `<div class="msg msg-err">${error.message}</div>`; return; }
+  msg.innerHTML = `<div class="msg msg-ok">Rol actualizado.</div>`;
+}
+
+async function bd_crearUsuario(){
+  const nombre_completo = document.getElementById('bd_nuevoNombreCompleto').value.trim();
+  const usuario = document.getElementById('bd_nuevoUsuario').value.trim().toLowerCase();
+  const password = document.getElementById('bd_nuevaPass').value;
+  const rol = document.getElementById('bd_nuevoRol').value;
+  const sucursal_id = document.getElementById('bd_nuevoUsrSucursal').value;
+  const msg = document.getElementById('bd_crearUsrMsg');
+  msg.innerHTML = '';
+
+  if(!nombre_completo || !usuario || !password || !sucursal_id){ msg.innerHTML = `<div class="msg msg-err">Completá todos los campos.</div>`; return; }
+
+  const { data: sesion } = await client.auth.getSession();
+  const token = sesion?.session?.access_token;
+
+  try{
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/crear-usuario`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ usuario, password, nombre_completo, rol, sucursal_id }),
+    });
+    const resultado = await res.json();
+    if(!res.ok){ msg.innerHTML = `<div class="msg msg-err">${resultado.error || 'Error desconocido'}</div>`; return; }
+    msg.innerHTML = `<div class="msg msg-ok">Usuario "${usuario}" creado.</div>`;
+    document.getElementById('bd_nuevoNombreCompleto').value = '';
+    document.getElementById('bd_nuevoUsuario').value = '';
+    document.getElementById('bd_nuevaPass').value = '';
+    await bd_cargarUsuarios();
+  }catch(e){
+    msg.innerHTML = `<div class="msg msg-err">No se pudo contactar la función: ${e.message}</div>`;
+  }
+}
+
+let bd_debounce = null, bd_clienteEditando = null;
+
+function bd_buscarClientes(){
+  clearTimeout(bd_debounce);
+  const termino = document.getElementById('bd_buscarCliente').value.trim();
+  const caja = document.getElementById('bd_sugerencias');
+  if(termino.length < 2){ caja.classList.add('hidden'); caja.innerHTML=''; return; }
+  bd_debounce = setTimeout(async () => {
+    const { data, error } = await client.from('clientes').select('id, nombre, direccion, telefono, lat, lng').ilike('nombre', `%${termino}%`).limit(10);
+    caja.innerHTML = '';
+    if(error || !data){ caja.classList.add('hidden'); return; }
+    data.forEach(c => {
+      const div = document.createElement('div'); div.className = 'suggestion';
+      div.innerHTML = `<div>${c.nombre}</div><div class="addr">${c.direccion||'sin dirección'}</div>`;
+      div.onclick = () => bd_seleccionarClienteEditar(c);
+      caja.appendChild(div);
+    });
+    caja.classList.remove('hidden');
+  }, 300);
+}
+
+function bd_seleccionarClienteEditar(c){
+  bd_clienteEditando = c;
+  document.getElementById('bd_sugerencias').classList.add('hidden');
+  document.getElementById('bd_buscarCliente').value = c.nombre;
+  document.getElementById('bd_editNombre').value = c.nombre || '';
+  document.getElementById('bd_editDireccion').value = c.direccion || '';
+  document.getElementById('bd_editTelefono').value = c.telefono || '';
+  document.getElementById('bd_bloqueEditarCliente').classList.remove('hidden');
+}
+
+async function bd_guardarCliente(){
+  const msg = document.getElementById('bd_editarClienteMsg'); msg.innerHTML = '';
+  const nombre = document.getElementById('bd_editNombre').value.trim();
+  const direccion = document.getElementById('bd_editDireccion').value.trim();
+  const telefono = document.getElementById('bd_editTelefono').value.trim();
+
+  let lat = bd_clienteEditando.lat, lng = bd_clienteEditando.lng;
+  if(direccion !== bd_clienteEditando.direccion){
+    lat = null; lng = null;
+    try{
+      const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=ar&q=${encodeURIComponent(direccion + ', Argentina')}`;
+      const res = await fetch(url, { headers: { 'Accept-Language': 'es' } });
+      const geo = await res.json();
+      if(geo && geo.length > 0){ lat = parseFloat(geo[0].lat); lng = parseFloat(geo[0].lon); }
+    }catch(e){ /* si falla, queda sin coordenadas */ }
+  }
+
+  const { error } = await client.from('clientes').update({ nombre, direccion: direccion||null, telefono: telefono||null, lat, lng }).eq('id', bd_clienteEditando.id);
+  if(error){ msg.innerHTML = `<div class="msg msg-err">${error.message}</div>`; return; }
+  msg.innerHTML = `<div class="msg msg-ok">Cliente actualizado.</div>`;
+}
+
+async function bd_importarCsv(){
+  const archivo = document.getElementById('bd_archivoCsv').files[0];
+  const msg = document.getElementById('bd_csvMsg'); msg.innerHTML = '';
+  const barra = document.getElementById('bd_csvBarra'); barra.style.width = '0%';
+  if(!archivo){ msg.innerHTML = `<div class="msg msg-err">Elegí un archivo primero.</div>`; return; }
+
+  const buffer = await archivo.arrayBuffer();
+  const wb = XLSX.read(buffer, { type: 'array' });
+  const hoja = wb.Sheets[wb.SheetNames[0]];
+  const filas = XLSX.utils.sheet_to_json(hoja, { defval: null });
+
+  const norm = (obj, clave) => {
+    const k = Object.keys(obj).find(x => x.trim().toLowerCase() === clave);
+    return k ? obj[k] : null;
+  };
+
+  let ok = 0, fallidos = 0;
+  for(let i = 0; i < filas.length; i++){
+    const fila = filas[i];
+    const nombre = norm(fila, 'nombre');
+    const direccion = norm(fila, 'direccion') || norm(fila, 'dirección');
+    const telefono = norm(fila, 'telefono') || norm(fila, 'teléfono');
+    if(!nombre){ fallidos++; continue; }
+
+    let lat = null, lng = null;
+    if(direccion){
+      try{
+        const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=ar&q=${encodeURIComponent(direccion + ', Argentina')}`;
+        const res = await fetch(url, { headers: { 'Accept-Language': 'es' } });
+        const geo = await res.json();
+        if(geo && geo.length > 0){ lat = parseFloat(geo[0].lat); lng = parseFloat(geo[0].lon); }
+      }catch(e){}
+      await new Promise(r => setTimeout(r, 1100));
+    }
+
+    const { error } = await client.from('clientes').insert({ nombre: String(nombre).trim(), direccion: direccion?String(direccion).trim():null, telefono: telefono?String(telefono).trim():null, lat, lng, sucursal_id: sucursalSeleccionada, creado_por: usuarioActual.id });
+    if(error) fallidos++; else ok++;
+
+    barra.style.width = Math.round(((i+1)/filas.length)*100) + '%';
+  }
+
+  msg.innerHTML = `<div class="msg msg-ok">${ok} clientes importados. ${fallidos ? fallidos + ' con error.' : ''}</div>`;
+  document.getElementById('bd_archivoCsv').value = '';
 }
 </script>
 </body>
