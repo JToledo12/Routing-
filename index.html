@@ -742,10 +742,23 @@ function a_renderPendientes(){
     const div = document.createElement('div'); div.className = 'pendiente-row';
     div.innerHTML = `
       <input type="checkbox" ${enOrden?'checked':''} onchange="a_toggleEntrega('${g.cliente_id}')">
-      <div><div class="pendiente-nombre">${g.nombre}</div><div class="pendiente-detalle">${totalBultos} bultos · ${g.envios.length} referencia(s)</div></div>
+      <div style="flex:1;"><div class="pendiente-nombre">${g.nombre}</div><div class="pendiente-detalle">${totalBultos} bultos · ${g.envios.length} referencia(s)</div></div>
+      <button class="btn-danger" onclick="a_eliminarPendientes('${g.cliente_id}')">Eliminar</button>
     `;
     cont.appendChild(div);
   });
+}
+
+async function a_eliminarPendientes(clienteId){
+  const g = a_pendientesPorCliente[clienteId];
+  if(!confirm(`¿Eliminar ${g.envios.length} envío(s) pendiente(s) de ${g.nombre}?`)) return;
+  const ids = g.envios.map(e => e.id);
+  const { error } = await client.from('envios').delete().in('id', ids);
+  if(error){ alert('Error: ' + error.message); return; }
+  const idx = a_ordenParadas.findIndex(p => p.cliente_id === clienteId);
+  if(idx >= 0) a_ordenParadas.splice(idx, 1);
+  await a_cargarPendientes();
+  a_renderOrden();
 }
 
 function a_toggleEntrega(clienteId){
