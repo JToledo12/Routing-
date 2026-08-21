@@ -866,11 +866,12 @@ async function m_cargarOperadoresActivos(){
   }
   setTimeout(() => m_mapa.invalidateSize(), 50);
 
-  const { data, error } = await client.from('recorridos').select('*, perfiles!recorridos_operador_id_fkey(nombre_completo)').eq('sucursal_id', sucursalSeleccionada).eq('estado','en_curso').order('created_at',{ascending:false});
+  const hoy = new Date().toISOString().slice(0,10);
+  const { data, error } = await client.from('recorridos').select('*, perfiles!recorridos_operador_id_fkey(nombre_completo)').eq('sucursal_id', sucursalSeleccionada).eq('estado','en_curso').eq('fecha', hoy).order('created_at',{ascending:false});
   m_recorridosActivos = data || [];
   const cont = document.getElementById('m_listaOperadores'); cont.innerHTML = '';
   if(error){ cont.innerHTML = `<div class="msg msg-err" style="margin:12px;">${error.message}</div>`; return; }
-  if(m_recorridosActivos.length === 0){ cont.innerHTML = '<p style="font-size:12.5px;color:var(--ink-soft);padding:14px 16px;">No hay recorridos en curso en esta sucursal.</p>'; return; }
+  if(m_recorridosActivos.length === 0){ cont.innerHTML = '<p style="font-size:12.5px;color:var(--ink-soft);padding:14px 16px;">No hay recorridos en curso hoy en esta sucursal.</p>'; return; }
   for(const r of m_recorridosActivos){
     const { data: paradasR } = await client.from('paradas').select('estado').eq('recorrido_id', r.id);
     const total = paradasR?.length||0, resueltas = paradasR?.filter(p=>p.estado!=='pendiente').length||0;
@@ -883,15 +884,27 @@ async function m_cargarOperadoresActivos(){
     const div = document.createElement('div'); div.className = 'op-row' + (r.id===m_recorridoSeleccionadoId?' active':'');
     div.innerHTML = `
       <div class="op-dot"></div>
-      <div style="flex:1;">
+      <div style="flex:1;" onclick="m_seleccionarRecorrido('${r.id}')">
         <div class="op-name">Nº ${r.numero_recorrido} · ${r.perfiles?.nombre_completo||'—'}</div>
         <div class="op-meta">${resueltas}/${total} paradas (${pct}%) · ${tiempo}</div>
       </div>
+      <button class="btn-ghost btn-small" onclick="event.stopPropagation(); m_forzarCierre('${r.id}')">Cerrar</button>
     `;
-    div.onclick = () => m_seleccionarRecorrido(r.id);
     cont.appendChild(div);
   }
   if(!m_recorridoSeleccionadoId && m_recorridosActivos.length>0) m_seleccionarRecorrido(m_recorridosActivos[0].id);
+}
+
+async function m_forzarCierre(recorridoId){
+  if(!confirm('¿Cerrar este recorrido manualmente? Usalo solo si quedó "en curso" sin que el operador lo haya finalizado.')) return;
+  const { error } = await client.from('recorridos').update({ estado:'finalizado', finalizado_en: new Date().toISOString() }).eq('id', recorridoId);
+  if(error){ alert('Error: ' + error.message); return; }
+  if(m_recorridoSeleccionadoId === recorridoId){
+    m_recorridoSeleccionadoId = null;
+    document.getElementById('m_livePill').classList.add('hidden');
+    document.getElementById('m_cardParadas').classList.add('hidden');
+  }
+  await m_cargarOperadoresActivos();
 }
 
 async function m_seleccionarRecorrido(recorridoId){
