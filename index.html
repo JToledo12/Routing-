@@ -413,7 +413,7 @@
         <div id="bd_usrMsg"></div>
         <div style="overflow-x:auto;">
         <table style="margin-bottom:18px;">
-          <thead><tr><th>Nombre</th><th>Usuario</th><th>Sucursal</th><th>Rol</th><th></th></tr></thead>
+          <thead><tr><th>Nombre</th><th>Usuario</th><th>Sucursal</th><th>Rol</th><th></th><th>Nueva contraseña</th><th></th></tr></thead>
           <tbody id="bd_tablaUsuarios"></tbody>
         </table>
         </div>
@@ -1080,7 +1080,8 @@ async function d_abrirReplay(r){
   (paradas||[]).forEach(p => {
     const div = document.createElement('div'); div.className = 'stop-item';
     const hora = p.marcado_en ? new Date(p.marcado_en).toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'}) : 'sin marcar';
-    div.innerHTML = `<div><div class="n">${p.orden}. ${p.clientes?.nombre||'—'}</div><div class="hora">${p.estado.replace(/_/g,' ')} · ${hora}</div></div>`;
+    const linkFirma = p.firma_url ? `<button class="btn-ghost btn-small" style="margin-top:4px;" onclick="d_verFirma('${p.firma_url}')">Ver firma</button>` : '';
+    div.innerHTML = `<div><div class="n">${p.orden}. ${p.clientes?.nombre||'—'}</div><div class="hora">${p.estado.replace(/_/g,' ')} · ${hora}</div>${linkFirma}</div>`;
     lista.appendChild(div);
     if(p.lat_registrada && p.lng_registrada){
       const color = COLOR_ESTADO[p.estado] || '#D8D2C2';
@@ -1104,6 +1105,12 @@ async function d_abrirReplay(r){
     });
   }
 }
+async function d_verFirma(path){
+  const { data, error } = await client.storage.from('firmas').createSignedUrl(path, 300);
+  if(error){ alert('No se pudo abrir la firma: ' + error.message); return; }
+  window.open(data.signedUrl, '_blank');
+}
+
 function d_cerrarReplay(){ document.getElementById('d_cardReplay').classList.add('hidden'); }
 
 async function d_exportarDetalle(){
@@ -1495,9 +1502,38 @@ async function bd_cargarUsuarios(){
         </select>
       </td>
       <td><button class="btn-ghost btn-small" onclick="bd_cambiarRol('${u.id}')">Guardar</button></td>
+      <td><input id="bd_pass_${u.id}" type="password" placeholder="mínimo 6 caracteres" style="min-width:140px;"></td>
+      <td><button class="btn-ghost btn-small" onclick="bd_cambiarPassword('${u.id}')">Cambiar</button></td>
     `;
     tbody.appendChild(tr);
   });
+}
+
+async function bd_cambiarPassword(userId){
+  const input = document.getElementById('bd_pass_'+userId);
+  const nueva = input.value;
+  const msg = document.getElementById('bd_usrMsg');
+  msg.innerHTML = '';
+
+  if(!nueva || nueva.length < 6){ msg.innerHTML = `<div class="msg msg-err">La contraseña debe tener al menos 6 caracteres.</div>`; return; }
+  if(!confirm('¿Cambiar la contraseña de este usuario?')) return;
+
+  const { data: sesion } = await client.auth.getSession();
+  const token = sesion?.session?.access_token;
+
+  try{
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/crear-usuario`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ accion: 'cambiar_password', user_id: userId, password_nueva: nueva }),
+    });
+    const resultado = await res.json();
+    if(!res.ok){ msg.innerHTML = `<div class="msg msg-err">${resultado.error || 'Error desconocido'}</div>`; return; }
+    msg.innerHTML = `<div class="msg msg-ok">Contraseña actualizada.</div>`;
+    input.value = '';
+  }catch(e){
+    msg.innerHTML = `<div class="msg msg-err">No se pudo contactar la función: ${e.message}</div>`;
+  }
 }
 
 async function bd_cambiarRol(userId){
