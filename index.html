@@ -353,6 +353,13 @@
       <div class="card"><div class="card-body"><p style="font-size:13px;color:var(--ink-soft);">No tenés un recorrido asignado para hoy.</p></div></div>
     </div>
 
+    <div id="o_vistaSeleccion" class="hidden">
+      <div class="card"><div class="card-body">
+        <p style="font-size:13px;color:var(--ink-soft);margin-top:0;">Tenés más de un recorrido asignado hoy. Elegí cuál hacer:</p>
+        <div id="o_listaSeleccion"></div>
+      </div></div>
+    </div>
+
     <div id="o_vistaLista" class="hidden">
       <div id="o_listaMsg"></div>
       <button id="o_btnIniciar" class="btn-primary hidden" style="width:100%;margin-bottom:14px;" onclick="o_iniciarRecorrido()">Iniciar recorrido</button>
@@ -1135,14 +1142,15 @@ async function d_exportarDetalle(){
               'Estado parada': p.estado,
               'Referencia pedido': e.referencia,
               'Tipo movimiento': e.tipo_movimiento === 'retiro' ? 'Retiro' : 'Entrega',
+              'Estado pedido': e.estado === 'completado' ? 'Completado' : e.estado === 'no_realizado' ? 'No realizado' : 'Pendiente',
               'Bultos': e.cantidad_bultos,
             });
           });
         } else {
-          filas.push({ 'Nº Recorrido': r.numero_recorrido, 'Fecha': r.fecha, 'Realiza': r.operador_nombre, 'Orden parada': p.orden, 'Cliente': p.clientes?.nombre||'', 'Dirección': p.clientes?.direccion||'', 'Tipo parada':'Entrega', 'Estado parada': p.estado, 'Referencia pedido':'', 'Tipo movimiento':'', 'Bultos':'' });
+          filas.push({ 'Nº Recorrido': r.numero_recorrido, 'Fecha': r.fecha, 'Realiza': r.operador_nombre, 'Orden parada': p.orden, 'Cliente': p.clientes?.nombre||'', 'Dirección': p.clientes?.direccion||'', 'Tipo parada':'Entrega', 'Estado parada': p.estado, 'Referencia pedido':'', 'Tipo movimiento':'', 'Estado pedido':'', 'Bultos':'' });
         }
       } else {
-        filas.push({ 'Nº Recorrido': r.numero_recorrido, 'Fecha': r.fecha, 'Realiza': r.operador_nombre, 'Orden parada': p.orden, 'Cliente': p.clientes?.nombre||'', 'Dirección': p.clientes?.direccion||'', 'Tipo parada':'Visita', 'Estado parada': p.estado, 'Referencia pedido':'', 'Tipo movimiento':'', 'Bultos':'' });
+        filas.push({ 'Nº Recorrido': r.numero_recorrido, 'Fecha': r.fecha, 'Realiza': r.operador_nombre, 'Orden parada': p.orden, 'Cliente': p.clientes?.nombre||'', 'Dirección': p.clientes?.direccion||'', 'Tipo parada':'Visita', 'Estado parada': p.estado, 'Referencia pedido':'', 'Tipo movimiento':'', 'Estado pedido':'', 'Bultos':'' });
       }
     }
   }
@@ -1213,12 +1221,39 @@ let o_watchId = null, o_ultimaPos = null;
 
 async function o_arrancar(){
   const hoy = new Date().toISOString().slice(0,10);
-  const { data: recorridos } = await client.from('recorridos').select('*').eq('operador_id', usuarioActual.id).eq('fecha', hoy).order('created_at',{ascending:false}).limit(1);
+  const { data: recorridos } = await client.from('recorridos').select('*').eq('operador_id', usuarioActual.id).eq('fecha', hoy).neq('estado','finalizado').order('created_at',{ascending:true});
   document.getElementById('o_vistaSinRecorrido').classList.add('hidden');
+  document.getElementById('o_vistaSeleccion').classList.add('hidden');
   document.getElementById('o_vistaLista').classList.add('hidden');
   document.getElementById('o_progressTrack').classList.add('hidden');
+
   if(!recorridos || recorridos.length===0){ document.getElementById('o_vistaSinRecorrido').classList.remove('hidden'); return; }
-  o_recorridoActual = recorridos[0];
+
+  if(recorridos.length > 1){
+    const cont = document.getElementById('o_listaSeleccion'); cont.innerHTML = '';
+    for(const r of recorridos){
+      const { data: paradasR } = await client.from('paradas').select('estado').eq('recorrido_id', r.id);
+      const total = paradasR?.length || 0;
+      const div = document.createElement('div'); div.className = 'stop';
+      div.style.cursor = 'pointer';
+      div.innerHTML = `
+        <div class="stop-num">${r.estado === 'en_curso' ? '▶' : r.numero_recorrido}</div>
+        <div class="stop-info"><div class="stop-nombre">Recorrido Nº ${r.numero_recorrido}</div><div class="stop-sub">${total} paradas · ${r.estado === 'en_curso' ? 'ya iniciado' : 'sin iniciar'}</div></div>
+        <span class="stop-arrow">›</span>
+      `;
+      div.onclick = () => o_elegirRecorrido(r);
+      cont.appendChild(div);
+    }
+    document.getElementById('o_vistaSeleccion').classList.remove('hidden');
+    return;
+  }
+
+  await o_elegirRecorrido(recorridos[0]);
+}
+
+async function o_elegirRecorrido(recorrido){
+  o_recorridoActual = recorrido;
+  document.getElementById('o_vistaSeleccion').classList.add('hidden');
   await o_cargarParadas();
   await o_cargarImprevistos();
   document.getElementById('o_vistaLista').classList.remove('hidden');
@@ -1300,12 +1335,18 @@ function o_abrirDetalle(index){
   document.getElementById('o_detalleMsg').innerHTML = '';
   document.getElementById('o_detalleContador').textContent = `Parada ${index+1} de ${o_paradas.length}`;
   const totalBultos = o_paradaEnEdicion.envios.reduce((s,e)=>s+e.cantidad_bultos,0);
-  let lineas = o_paradaEnEdicion.envios.map(e => `<div class="envio-linea"><span>${e.referencia} (${e.tipo_movimiento==='retiro'?'Retiro':'Entrega'})</span><span>${e.cantidad_bultos} bulto(s)</span></div>`).join('');
+  let lineas = o_paradaEnEdicion.envios.map(e => `
+    <label style="display:flex;align-items:center;gap:8px;padding:5px 0;border-top:1px dashed var(--line);font-size:12.5px;">
+      <input type="checkbox" class="o_chk_envio" data-envio-id="${e.id}" ${e.estado !== 'no_realizado' ? 'checked' : ''} style="width:auto;">
+      <span style="flex:1;">${e.referencia} (${e.tipo_movimiento==='retiro'?'Retiro':'Entrega'})</span>
+      <span>${e.cantidad_bultos} bulto(s)</span>
+    </label>
+  `).join('');
   document.getElementById('o_clienteInfo').innerHTML = `
     <span class="badge ${o_paradaEnEdicion.tipo==='entrega'?'badge-entrega':'badge-visita'}">${o_paradaEnEdicion.tipo==='entrega'?'Entrega':'Visita'}</span>
     <h5 style="margin-top:8px;">${o_paradaEnEdicion.clientes?.nombre||'—'}</h5>
     <div class="addr">${o_paradaEnEdicion.clientes?.direccion||'sin dirección'}</div>
-    ${o_paradaEnEdicion.tipo==='entrega' ? lineas + `<div class="envio-total">Total: ${totalBultos} bultos</div>` : ''}
+    ${o_paradaEnEdicion.tipo==='entrega' ? `<p style="font-size:11px;color:var(--ink-soft);margin:8px 0 0 0;">Destildá lo que no se haya completado (por ej. si el retiro no está listo)</p>` + lineas + `<div class="envio-total">Total: ${totalBultos} bultos</div>` : ''}
   `;
   const opciones = o_paradaEnEdicion.tipo==='entrega' ? ESTADOS_ENTREGA : ESTADOS_VISITA;
   const grid = document.getElementById('o_statusGrid'); grid.innerHTML = '';
@@ -1428,6 +1469,23 @@ async function o_confirmarParada(){
     firma_url: firmaUrl, lat_registrada: pos?.lat||null, lng_registrada: pos?.lng||null,
   }).eq('id', o_paradaEnEdicion.id);
   if(error){ msg.innerHTML = `<div class="msg msg-err">${error.message}</div>`; document.getElementById('o_btnConfirmar').disabled = false; return; }
+
+  if(o_paradaEnEdicion.tipo === 'entrega' && o_paradaEnEdicion.envios.length > 0){
+    const checks = document.querySelectorAll('.o_chk_envio');
+    const actualizaciones = [];
+    if(o_estadoElegido.valor === 'entregado'){
+      checks.forEach(chk => {
+        const nuevoEstado = chk.checked ? 'completado' : 'no_realizado';
+        actualizaciones.push(client.from('envios').update({ estado: nuevoEstado, marcado_por: usuarioActual.id, marcado_en: new Date().toISOString() }).eq('id', chk.dataset.envioId));
+      });
+    } else if(['no_entregado_ausente','no_entregado_rechazado','no_entregado_direccion_incorrecta'].includes(o_estadoElegido.valor)){
+      o_paradaEnEdicion.envios.forEach(e => {
+        actualizaciones.push(client.from('envios').update({ estado: 'no_realizado', marcado_por: usuarioActual.id, marcado_en: new Date().toISOString() }).eq('id', e.id));
+      });
+    }
+    await Promise.all(actualizaciones);
+  }
+
   o_paradaEnEdicion.estado = o_estadoElegido.valor;
   o_volverALista();
   o_renderLista();
