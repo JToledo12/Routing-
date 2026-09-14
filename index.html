@@ -391,10 +391,21 @@
       <div class="section-label">Resultado</div>
       <div class="status-grid" id="o_statusGrid"></div>
       <div id="o_bloqueFirma" class="hidden">
-        <div class="section-label">Firma de conformidad</div>
-        <div class="sig-pad"><canvas id="o_sigCanvas"></canvas></div>
-        <button class="sig-clear" onclick="o_limpiarFirma()">Borrar firma</button>
+        <div class="section-label">Conformidad de entrega</div>
+        <div style="display:flex; gap:8px; margin-bottom:10px;">
+          <button type="button" id="o_btnMetodoFirma" class="toggle-tipo activo" onclick="o_elegirMetodoConfirmidad('firma')">Firma</button>
+          <button type="button" id="o_btnMetodoDni" class="toggle-tipo" onclick="o_elegirMetodoConfirmidad('dni')">Nombre y DNI</button>
+        </div>
+        <div id="o_bloqueSigPad">
+          <div class="sig-pad"><canvas id="o_sigCanvas"></canvas></div>
+          <button class="sig-clear" onclick="o_limpiarFirma()">Borrar firma</button>
+        </div>
+        <div id="o_bloqueDni" class="hidden">
+          <div class="field"><label>Nombre de quien recibe</label><input id="o_nombreReceptor" oninput="o_actualizarBotonConfirmar()"></div>
+          <div class="field"><label>DNI</label><input id="o_dniReceptor" inputmode="numeric" oninput="o_actualizarBotonConfirmar()"></div>
+        </div>
       </div>
+      <div id="o_avisoCheck" class="msg msg-err hidden">Tildá al menos un pedido como completado, o elegí otro resultado si no se entregó nada.</div>
       <button class="btn-primary" style="width:100%;margin-top:14px;" id="o_btnConfirmar" onclick="o_confirmarParada()" disabled>Confirmar</button>
     </div>
   </div>
@@ -1088,7 +1099,8 @@ async function d_abrirReplay(r){
     const div = document.createElement('div'); div.className = 'stop-item';
     const hora = p.marcado_en ? new Date(p.marcado_en).toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'}) : 'sin marcar';
     const linkFirma = p.firma_url ? `<button class="btn-ghost btn-small" style="margin-top:4px;" onclick="d_verFirma('${p.firma_url}')">Ver firma</button>` : '';
-    div.innerHTML = `<div><div class="n">${p.orden}. ${p.clientes?.nombre||'—'}</div><div class="hora">${p.estado.replace(/_/g,' ')} · ${hora}</div>${linkFirma}</div>`;
+    const datosReceptor = p.nombre_receptor ? `<div style="font-family:var(--mono);font-size:10.5px;color:var(--ink-soft);margin-top:2px;">Recibió: ${p.nombre_receptor} · DNI ${p.dni_receptor||'—'}</div>` : '';
+    div.innerHTML = `<div><div class="n">${p.orden}. ${p.clientes?.nombre||'—'}</div><div class="hora">${p.estado.replace(/_/g,' ')} · ${hora}</div>${datosReceptor}${linkFirma}</div>`;
     lista.appendChild(div);
     if(p.lat_registrada && p.lng_registrada){
       const color = COLOR_ESTADO[p.estado] || '#D8D2C2';
@@ -1282,6 +1294,7 @@ function o_renderLista(){
     const div = document.createElement('div');
     const esActual = i === primeraPendienteIdx;
     div.className = 'stop' + (p.estado!=='pendiente'?' resuelta':'') + (esActual?' actual':'');
+    if(o_recorridoActual.estado === 'planificado'){ div.style.opacity = '0.55'; div.style.cursor = 'default'; }
     const totalBultos = p.envios.reduce((s,e)=>s+e.cantidad_bultos,0);
     div.innerHTML = `
       <div class="stop-num">${p.estado!=='pendiente'?'✓':(i+1)}</div>
@@ -1289,7 +1302,10 @@ function o_renderLista(){
       <span class="badge ${p.tipo==='entrega'?'badge-entrega':'badge-visita'}">${p.tipo==='entrega'?'Entrega':'Visita'}</span>
       <span class="stop-arrow">›</span>
     `;
-    div.onclick = () => o_abrirDetalle(i);
+    div.onclick = () => {
+      if(o_recorridoActual.estado === 'planificado'){ alert('Primero tenés que apretar "Iniciar recorrido".'); return; }
+      o_abrirDetalle(i);
+    };
     cont.appendChild(div);
   });
   document.getElementById('o_btnIniciar').classList.toggle('hidden', o_recorridoActual.estado !== 'planificado');
@@ -1331,13 +1347,14 @@ function o_iniciarSeguimientoGPS(){
 function o_detenerSeguimientoGPS(){ if(o_watchId !== null){ navigator.geolocation.clearWatch(o_watchId); o_watchId = null; } }
 
 function o_abrirDetalle(index){
-  o_paradaEnEdicion = o_paradas[index]; o_estadoElegido = null; o_firmaTrazada = false;
+  o_paradaEnEdicion = o_paradas[index]; o_estadoElegido = null; o_firmaTrazada = false; o_metodoConfirmidad = 'firma';
   document.getElementById('o_detalleMsg').innerHTML = '';
+  document.getElementById('o_avisoCheck').classList.add('hidden');
   document.getElementById('o_detalleContador').textContent = `Parada ${index+1} de ${o_paradas.length}`;
   const totalBultos = o_paradaEnEdicion.envios.reduce((s,e)=>s+e.cantidad_bultos,0);
   let lineas = o_paradaEnEdicion.envios.map(e => `
     <label style="display:flex;align-items:center;gap:8px;padding:5px 0;border-top:1px dashed var(--line);font-size:12.5px;">
-      <input type="checkbox" class="o_chk_envio" data-envio-id="${e.id}" ${e.estado !== 'no_realizado' ? 'checked' : ''} style="width:auto;">
+      <input type="checkbox" class="o_chk_envio" data-envio-id="${e.id}" ${e.estado !== 'no_realizado' ? 'checked' : ''} onchange="o_actualizarBotonConfirmar()" style="width:auto;">
       <span style="flex:1;">${e.referencia} (${e.tipo_movimiento==='retiro'?'Retiro':'Entrega'})</span>
       <span>${e.cantidad_bultos} bulto(s)</span>
     </label>
@@ -1361,14 +1378,57 @@ function o_abrirDetalle(index){
   document.getElementById('o_vistaDetalle').classList.remove('hidden');
 }
 
+let o_metodoConfirmidad = 'firma';
+
 function o_elegirEstado(op, btnEl){
   o_estadoElegido = op;
   document.querySelectorAll('#o_statusGrid .status-btn').forEach(b => b.classList.remove('sel'));
   btnEl.classList.add('sel');
   const necesitaFirma = op.firma;
   document.getElementById('o_bloqueFirma').classList.toggle('hidden', !necesitaFirma);
-  if(necesitaFirma) setTimeout(o_prepararCanvas, 30);
-  document.getElementById('o_btnConfirmar').disabled = necesitaFirma ? !o_firmaTrazada : false;
+  if(necesitaFirma){
+    o_elegirMetodoConfirmidad('firma');
+    setTimeout(o_prepararCanvas, 30);
+  }
+  o_actualizarBotonConfirmar();
+}
+
+function o_elegirMetodoConfirmidad(metodo){
+  o_metodoConfirmidad = metodo;
+  document.getElementById('o_btnMetodoFirma').classList.toggle('activo', metodo==='firma');
+  document.getElementById('o_btnMetodoDni').classList.toggle('activo', metodo==='dni');
+  document.getElementById('o_bloqueSigPad').classList.toggle('hidden', metodo!=='firma');
+  document.getElementById('o_bloqueDni').classList.toggle('hidden', metodo!=='dni');
+  document.getElementById('o_nombreReceptor').value = '';
+  document.getElementById('o_dniReceptor').value = '';
+  o_actualizarBotonConfirmar();
+}
+
+function o_haySeleccionValida(){
+  if(!o_estadoElegido) return false;
+  if(!o_estadoElegido.firma) return true;
+
+  // si hay pedidos, al menos uno tiene que estar tildado
+  if(o_paradaEnEdicion.tipo === 'entrega' && o_paradaEnEdicion.envios.length > 0){
+    const checks = document.querySelectorAll('.o_chk_envio');
+    const algunoTildado = Array.from(checks).some(c => c.checked);
+    if(!algunoTildado) return false;
+  }
+
+  if(o_metodoConfirmidad === 'firma') return o_firmaTrazada;
+
+  const nombre = document.getElementById('o_nombreReceptor')?.value.trim();
+  const dni = document.getElementById('o_dniReceptor')?.value.trim();
+  return !!nombre && !!dni;
+}
+
+function o_actualizarBotonConfirmar(){
+  const valido = o_haySeleccionValida();
+  document.getElementById('o_btnConfirmar').disabled = !valido;
+
+  const sinTildar = o_estadoElegido?.firma && o_paradaEnEdicion.tipo==='entrega' && o_paradaEnEdicion.envios.length > 0
+    && !Array.from(document.querySelectorAll('.o_chk_envio')).some(c => c.checked);
+  document.getElementById('o_avisoCheck').classList.toggle('hidden', !sinTildar);
 }
 
 function o_prepararCanvas(){
@@ -1379,7 +1439,7 @@ function o_prepararCanvas(){
   let drawing = false;
   const pos = (e) => { const r = canvas.getBoundingClientRect(); const p = e.touches ? e.touches[0] : e; return { x: p.clientX-r.left, y: p.clientY-r.top }; };
   const start = (e) => { drawing = true; const p = pos(e); ctx.beginPath(); ctx.moveTo(p.x,p.y); e.preventDefault(); };
-  const move = (e) => { if(!drawing) return; const p = pos(e); ctx.lineTo(p.x,p.y); ctx.stroke(); o_firmaTrazada = true; if(o_estadoElegido) document.getElementById('o_btnConfirmar').disabled = !o_firmaTrazada; e.preventDefault(); };
+  const move = (e) => { if(!drawing) return; const p = pos(e); ctx.lineTo(p.x,p.y); ctx.stroke(); o_firmaTrazada = true; o_actualizarBotonConfirmar(); e.preventDefault(); };
   const end = () => { drawing = false; };
   canvas.onmousedown = start; canvas.onmousemove = move; window.onmouseup = end;
   canvas.ontouchstart = start; canvas.ontouchmove = move; canvas.ontouchend = end;
@@ -1388,7 +1448,7 @@ function o_prepararCanvas(){
 function o_limpiarFirma(){
   const canvas = document.getElementById('o_sigCanvas'); const ctx = canvas.getContext('2d');
   ctx.clearRect(0,0,canvas.width,canvas.height); o_firmaTrazada = false;
-  if(o_estadoElegido?.firma) document.getElementById('o_btnConfirmar').disabled = true;
+  o_actualizarBotonConfirmar();
 }
 
 function o_volverALista(){ document.getElementById('o_vistaDetalle').classList.add('hidden'); document.getElementById('o_vistaLista').classList.remove('hidden'); }
@@ -1453,20 +1513,34 @@ function o_obtenerPosicionActual(){
 
 async function o_confirmarParada(){
   const msg = document.getElementById('o_detalleMsg'); msg.innerHTML = '';
-  document.getElementById('o_btnConfirmar').disabled = true;
-  let firmaUrl = null;
-  if(o_estadoElegido.firma){
-    const canvas = document.getElementById('o_sigCanvas');
-    const blob = await new Promise(res => canvas.toBlob(res, 'image/png'));
-    const path = `${o_recorridoActual.id}/${o_paradaEnEdicion.id}.png`;
-    const { error: errUpload } = await client.storage.from('firmas').upload(path, blob, { upsert:true, contentType:'image/png' });
-    if(errUpload){ msg.innerHTML = `<div class="msg msg-err">Error subiendo firma: ${errUpload.message}</div>`; document.getElementById('o_btnConfirmar').disabled = false; return; }
-    firmaUrl = path;
+
+  if(!o_haySeleccionValida()){
+    msg.innerHTML = `<div class="msg msg-err">Faltan datos para confirmar (revisá los pedidos tildados y la firma o el nombre/DNI).</div>`;
+    return;
   }
+
+  document.getElementById('o_btnConfirmar').disabled = true;
+  let firmaUrl = null, nombreReceptor = null, dniReceptor = null;
+
+  if(o_estadoElegido.firma){
+    if(o_metodoConfirmidad === 'firma'){
+      const canvas = document.getElementById('o_sigCanvas');
+      const blob = await new Promise(res => canvas.toBlob(res, 'image/png'));
+      const path = `${o_recorridoActual.id}/${o_paradaEnEdicion.id}.png`;
+      const { error: errUpload } = await client.storage.from('firmas').upload(path, blob, { upsert:true, contentType:'image/png' });
+      if(errUpload){ msg.innerHTML = `<div class="msg msg-err">Error subiendo firma: ${errUpload.message}</div>`; document.getElementById('o_btnConfirmar').disabled = false; return; }
+      firmaUrl = path;
+    } else {
+      nombreReceptor = document.getElementById('o_nombreReceptor').value.trim();
+      dniReceptor = document.getElementById('o_dniReceptor').value.trim();
+    }
+  }
+
   const pos = await o_obtenerPosicionActual();
   const { error } = await client.from('paradas').update({
     estado: o_estadoElegido.valor, marcado_por: usuarioActual.id, marcado_en: new Date().toISOString(),
-    firma_url: firmaUrl, lat_registrada: pos?.lat||null, lng_registrada: pos?.lng||null,
+    firma_url: firmaUrl, nombre_receptor: nombreReceptor, dni_receptor: dniReceptor,
+    lat_registrada: pos?.lat||null, lng_registrada: pos?.lng||null,
   }).eq('id', o_paradaEnEdicion.id);
   if(error){ msg.innerHTML = `<div class="msg msg-err">${error.message}</div>`; document.getElementById('o_btnConfirmar').disabled = false; return; }
 
