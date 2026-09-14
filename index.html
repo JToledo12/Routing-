@@ -362,6 +362,7 @@
 
     <div id="o_vistaLista" class="hidden">
       <div id="o_listaMsg"></div>
+      <div id="o_linkOtros" class="hidden" style="font-family:var(--mono);font-size:11.5px;color:var(--accent);margin-bottom:10px;cursor:pointer;" onclick="o_arrancar()">‹ Ver otros recorridos de hoy</div>
       <button id="o_btnIniciar" class="btn-primary hidden" style="width:100%;margin-bottom:14px;" onclick="o_iniciarRecorrido()">Iniciar recorrido</button>
       <button class="btn-ghost" style="width:100%;margin-bottom:14px;" onclick="o_toggleMapa()">Ver mapa de paradas</button>
       <div id="o_mapaWrap" class="hidden" style="margin-bottom:14px;position:relative;">
@@ -1013,7 +1014,7 @@ async function d_buscar(){
   const tbody = document.getElementById('d_tablaRecorridos'); const msg = document.getElementById('d_tablaMsg');
   msg.innerHTML = ''; tbody.innerHTML = ''; d_cerrarReplay();
 
-  const { data, error } = await client.from('vista_resumen_recorridos').select('*').eq('sucursal_id', sucursalSeleccionada).gte('fecha', desde).lte('fecha', hasta).order('fecha',{ascending:false});
+  const { data, error } = await client.from('vista_resumen_recorridos').select('*').eq('sucursal_id', sucursalSeleccionada).gte('fecha', desde).lte('fecha', hasta).order('fecha',{ascending:false}).order('numero_recorrido',{ascending:false});
   if(error){ msg.innerHTML = `<div class="msg msg-err">${error.message}</div>`; return; }
   d_ultimoResultado = data;
   document.getElementById('d_contadorRecorridos').textContent = data.length;
@@ -1139,10 +1140,12 @@ async function d_exportarDetalle(){
   for(const r of d_ultimoResultado){
     const { data: paradas } = await client.from('paradas').select('*, clientes(nombre, direccion)').eq('recorrido_id', r.id).order('orden');
     for(const p of (paradas || [])){
+      const horaParada = p.marcado_en ? new Date(p.marcado_en).toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'}) : '';
       if(p.tipo === 'entrega'){
         const { data: envios } = await client.from('envios').select('*').eq('parada_id', p.id);
         if(envios && envios.length > 0){
           envios.forEach(e => {
+            const horaPedido = e.marcado_en ? new Date(e.marcado_en).toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'}) : horaParada;
             filas.push({
               'Nº Recorrido': r.numero_recorrido,
               'Fecha': r.fecha,
@@ -1152,17 +1155,19 @@ async function d_exportarDetalle(){
               'Dirección': p.clientes?.direccion || '',
               'Tipo parada': 'Entrega',
               'Estado parada': p.estado,
+              'Hora de la visita': horaParada,
               'Referencia pedido': e.referencia,
               'Tipo movimiento': e.tipo_movimiento === 'retiro' ? 'Retiro' : 'Entrega',
               'Estado pedido': e.estado === 'completado' ? 'Completado' : e.estado === 'no_realizado' ? 'No realizado' : 'Pendiente',
+              'Hora del pedido': horaPedido,
               'Bultos': e.cantidad_bultos,
             });
           });
         } else {
-          filas.push({ 'Nº Recorrido': r.numero_recorrido, 'Fecha': r.fecha, 'Realiza': r.operador_nombre, 'Orden parada': p.orden, 'Cliente': p.clientes?.nombre||'', 'Dirección': p.clientes?.direccion||'', 'Tipo parada':'Entrega', 'Estado parada': p.estado, 'Referencia pedido':'', 'Tipo movimiento':'', 'Estado pedido':'', 'Bultos':'' });
+          filas.push({ 'Nº Recorrido': r.numero_recorrido, 'Fecha': r.fecha, 'Realiza': r.operador_nombre, 'Orden parada': p.orden, 'Cliente': p.clientes?.nombre||'', 'Dirección': p.clientes?.direccion||'', 'Tipo parada':'Entrega', 'Estado parada': p.estado, 'Hora de la visita': horaParada, 'Referencia pedido':'', 'Tipo movimiento':'', 'Estado pedido':'', 'Hora del pedido':'', 'Bultos':'' });
         }
       } else {
-        filas.push({ 'Nº Recorrido': r.numero_recorrido, 'Fecha': r.fecha, 'Realiza': r.operador_nombre, 'Orden parada': p.orden, 'Cliente': p.clientes?.nombre||'', 'Dirección': p.clientes?.direccion||'', 'Tipo parada':'Visita', 'Estado parada': p.estado, 'Referencia pedido':'', 'Tipo movimiento':'', 'Estado pedido':'', 'Bultos':'' });
+        filas.push({ 'Nº Recorrido': r.numero_recorrido, 'Fecha': r.fecha, 'Realiza': r.operador_nombre, 'Orden parada': p.orden, 'Cliente': p.clientes?.nombre||'', 'Dirección': p.clientes?.direccion||'', 'Tipo parada':'Visita', 'Estado parada': p.estado, 'Hora de la visita': horaParada, 'Referencia pedido':'', 'Tipo movimiento':'', 'Estado pedido':'', 'Hora del pedido':'', 'Bultos':'' });
       }
     }
   }
@@ -1228,7 +1233,7 @@ const ESTADOS_ENTREGA = [
 ];
 const ESTADOS_VISITA = [ { valor:'visitado', label:'Visitado', firma:false }, { valor:'reprogramado', label:'Reprogramado', firma:false } ];
 
-let o_recorridoActual = null, o_paradas = [], o_paradaEnEdicion = null, o_estadoElegido = null, o_firmaTrazada = false;
+let o_recorridoActual = null, o_paradas = [], o_paradaEnEdicion = null, o_estadoElegido = null, o_firmaTrazada = false, o_totalRecorridosHoy = 0;
 let o_watchId = null, o_ultimaPos = null;
 
 async function o_arrancar(){
@@ -1238,6 +1243,7 @@ async function o_arrancar(){
   document.getElementById('o_vistaSeleccion').classList.add('hidden');
   document.getElementById('o_vistaLista').classList.add('hidden');
   document.getElementById('o_progressTrack').classList.add('hidden');
+  o_totalRecorridosHoy = recorridos ? recorridos.length : 0;
 
   if(!recorridos || recorridos.length===0){ document.getElementById('o_vistaSinRecorrido').classList.remove('hidden'); return; }
 
@@ -1270,6 +1276,7 @@ async function o_elegirRecorrido(recorrido){
   await o_cargarImprevistos();
   document.getElementById('o_vistaLista').classList.remove('hidden');
   document.getElementById('o_progressTrack').classList.remove('hidden');
+  document.getElementById('o_linkOtros').classList.toggle('hidden', o_totalRecorridosHoy <= 1);
   if(o_recorridoActual.estado === 'en_curso') o_iniciarSeguimientoGPS();
 }
 
@@ -1325,9 +1332,7 @@ async function o_finalizarRecorrido(){
   o_detenerSeguimientoGPS();
   const { error } = await client.from('recorridos').update({ estado:'finalizado', finalizado_en:new Date().toISOString() }).eq('id', o_recorridoActual.id);
   if(error){ document.getElementById('o_listaMsg').innerHTML = `<div class="msg msg-err">${error.message}</div>`; return; }
-  o_recorridoActual.estado = 'finalizado';
-  document.getElementById('o_listaMsg').innerHTML = `<div class="msg msg-ok">Recorrido finalizado. ¡Buen trabajo!</div>`;
-  o_renderLista();
+  await o_arrancar();
 }
 
 function o_distanciaMetros(a,b){ const R=6371000; const dLat=(b.lat-a.lat)*Math.PI/180, dLng=(b.lng-a.lng)*Math.PI/180; const s=Math.sin(dLat/2)**2+Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLng/2)**2; return R*2*Math.atan2(Math.sqrt(s),Math.sqrt(1-s)); }
