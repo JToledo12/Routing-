@@ -481,6 +481,38 @@
       </div>
     </div>
 
+    <div class="card">
+      <h2>Plantillas de Routing <span style="font-family:var(--mono);font-size:10.5px;color:var(--ink-soft);font-weight:400;">(de la sucursal elegida arriba)</span></h2>
+      <div class="card-body">
+        <div id="rt_listaPlantillas" style="margin-bottom:16px;"></div>
+        <div id="rt_msgNueva"></div>
+        <div class="row2">
+          <div class="field" style="margin-bottom:0;"><label>Nueva plantilla</label><input id="rt_nuevoNombre" placeholder="Ej: Ruta Centro mañana"></div>
+          <div style="display:flex;align-items:end;"><button class="btn-primary" style="width:100%;" onclick="rt_crearPlantilla()">Crear plantilla</button></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card hidden" id="rt_cardEditor">
+      <h2>
+        <span id="rt_tituloEditor"></span>
+        <span style="display:flex;gap:8px;">
+          <button class="btn-ghost btn-small" onclick="rt_toggleHistorial()">Ver historial</button>
+          <button class="btn-ghost btn-small" onclick="rt_cerrarEditor()">Cerrar</button>
+        </span>
+      </h2>
+      <div class="card-body">
+        <div id="rt_historial" class="hidden" style="margin-bottom:14px;padding:10px 12px;background:var(--paper);border-radius:8px;max-height:200px;overflow-y:auto;"></div>
+        <div id="rt_editorMsg"></div>
+        <div class="field autocomplete">
+          <label>Agregar cliente a la plantilla</label>
+          <input id="rt_buscarCliente" placeholder="Nombre del cliente…" oninput="rt_buscarClientes()" autocomplete="off">
+          <div id="rt_sugerencias" class="suggestions hidden"></div>
+        </div>
+        <div id="rt_listaClientes" style="margin-top:10px;"></div>
+      </div>
+    </div>
+
   </div>
 
 </main>
@@ -589,7 +621,7 @@ async function refrescarVistaActiva(){
   if(vistaActiva === 'mapa') await m_cargarOperadoresActivos();
   if(vistaActiva === 'dashboard'){ if(!document.getElementById('d_fechaDesde').value){ const h=new Date(),h7=new Date(); h7.setDate(h.getDate()-7); document.getElementById('d_fechaHasta').valueAsDate=h; document.getElementById('d_fechaDesde').valueAsDate=h7; } await d_buscar(); }
   if(vistaActiva === 'operador') await o_arrancar();
-  if(vistaActiva === 'basedatos'){ await bd_cargarSucursales(); await bd_cargarUsuarios(); }
+  if(vistaActiva === 'basedatos'){ await bd_cargarSucursales(); await bd_cargarUsuarios(); await rt_cargarPlantillas(); }
 }
 
 document.getElementById('loginPass').addEventListener('keydown', (ev) => { if(ev.key === 'Enter') login(); });
@@ -1809,6 +1841,152 @@ async function bd_importarCsv(){
 
   msg.innerHTML = `<div class="msg msg-ok">${ok} clientes importados. ${fallidos ? fallidos + ' con error.' : ''}</div>`;
   document.getElementById('bd_archivoCsv').value = '';
+}
+
+// =====================================================================
+// PLANTILLAS DE ROUTING
+// =====================================================================
+let rt_plantillaActual = null, rt_clientesPlantilla = [], rt_debounce = null;
+
+async function rt_cargarPlantillas(){
+  const { data, error } = await client.from('plantillas_routing').select('*').eq('sucursal_id', sucursalSeleccionada).order('nombre');
+  const cont = document.getElementById('rt_listaPlantillas'); cont.innerHTML = '';
+  if(error){ cont.innerHTML = `<div class="msg msg-err">${error.message}</div>`; return; }
+  if(!data || data.length === 0){ cont.innerHTML = '<p style="font-size:12.5px;color:var(--ink-soft);">Todavía no hay plantillas para esta sucursal.</p>'; return; }
+  for(const pl of data){
+    const { count } = await client.from('plantilla_clientes').select('*', { count:'exact', head:true }).eq('plantilla_id', pl.id);
+    const div = document.createElement('div'); div.className = 'op-row';
+    div.innerHTML = `<div style="flex:1;"><div class="op-name">${pl.nombre}</div><div class="op-meta">${count||0} clientes</div></div><button class="btn-ghost btn-small">Editar</button>`;
+    div.querySelector('button').onclick = () => rt_abrirEditor(pl);
+    cont.appendChild(div);
+  }
+}
+
+async function rt_crearPlantilla(){
+  const nombre = document.getElementById('rt_nuevoNombre').value.trim();
+  const msg = document.getElementById('rt_msgNueva');
+  if(!nombre){ msg.innerHTML = `<div class="msg msg-err">Poné un nombre.</div>`; return; }
+  const { data, error } = await client.from('plantillas_routing').insert({ sucursal_id: sucursalSeleccionada, nombre, creado_por: usuarioActual.id }).select().single();
+  if(error){ msg.innerHTML = `<div class="msg msg-err">${error.message}</div>`; return; }
+  await client.from('plantilla_historial').insert({ plantilla_id: data.id, modificado_por: usuarioActual.id, descripcion: `Creó la plantilla "${nombre}"` });
+  document.getElementById('rt_nuevoNombre').value = '';
+  msg.innerHTML = '';
+  await rt_cargarPlantillas();
+  rt_abrirEditor(data);
+}
+
+async function rt_registrarCambio(descripcion){
+  await client.from('plantilla_historial').insert({ plantilla_id: rt_plantillaActual.id, modificado_por: usuarioActual.id, descripcion });
+}
+
+async function rt_abrirEditor(plantilla){
+  rt_plantillaActual = plantilla;
+  document.getElementById('rt_tituloEditor').textContent = `Editando: ${plantilla.nombre}`;
+  document.getElementById('rt_historial').classList.add('hidden');
+  document.getElementById('rt_cardEditor').classList.remove('hidden');
+  document.getElementById('rt_cardEditor').scrollIntoView({ behavior:'smooth' });
+  await rt_cargarClientesPlantilla();
+}
+
+function rt_cerrarEditor(){
+  document.getElementById('rt_cardEditor').classList.add('hidden');
+  rt_plantillaActual = null;
+}
+
+async function rt_toggleHistorial(){
+  const cont = document.getElementById('rt_historial');
+  cont.classList.toggle('hidden');
+  if(cont.classList.contains('hidden')) return;
+  const { data } = await client.from('plantilla_historial').select('*, perfiles(nombre_completo)').eq('plantilla_id', rt_plantillaActual.id).order('modificado_en',{ascending:false});
+  cont.innerHTML = (data||[]).map(h => {
+    const fecha = new Date(h.modificado_en).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
+    return `<div style="font-size:12px;padding:5px 0;border-bottom:1px solid var(--paper-dim);"><b>${fecha}</b> — ${h.perfiles?.nombre_completo||'—'}: ${h.descripcion}</div>`;
+  }).join('') || '<p style="font-size:12px;color:var(--ink-soft);">Sin cambios registrados todavía.</p>';
+}
+
+async function rt_cargarClientesPlantilla(){
+  const { data } = await client.from('plantilla_clientes').select('*, clientes(nombre, direccion)').eq('plantilla_id', rt_plantillaActual.id).order('orden');
+  rt_clientesPlantilla = data || [];
+  rt_renderClientesPlantilla();
+}
+
+function rt_renderClientesPlantilla(){
+  const cont = document.getElementById('rt_listaClientes'); cont.innerHTML = '';
+  if(rt_clientesPlantilla.length === 0){ cont.innerHTML = '<p style="font-size:12.5px;color:var(--ink-soft);">Todavía no agregaste clientes a esta plantilla.</p>'; return; }
+  rt_clientesPlantilla.forEach((pc, i) => {
+    const div = document.createElement('div'); div.className = 'stop-row';
+    div.innerHTML = `
+      <div class="stop-num">${i+1}</div>
+      <div class="stop-info"><div class="stop-nombre">${pc.clientes?.nombre||'—'}</div><div class="stop-sub">${pc.clientes?.direccion||'sin dirección'}</div></div>
+      <button type="button" class="toggle-tipo ${pc.obligatorio?'activo':''}" style="flex:none;width:auto;padding:6px 10px;font-size:11px;" onclick="rt_toggleObligatorio(${i})">${pc.obligatorio?'Obligatoria':'Condicional'}</button>
+      <div class="stop-actions">
+        <button class="icon-btn" onclick="rt_mover(${i},-1)">↑</button>
+        <button class="icon-btn" onclick="rt_mover(${i},1)">↓</button>
+        <button class="icon-btn" onclick="rt_quitarCliente(${i})">✕</button>
+      </div>
+    `;
+    cont.appendChild(div);
+  });
+}
+
+function rt_buscarClientes(){
+  clearTimeout(rt_debounce);
+  const termino = document.getElementById('rt_buscarCliente').value.trim();
+  const caja = document.getElementById('rt_sugerencias');
+  if(termino.length < 2){ caja.classList.add('hidden'); caja.innerHTML=''; return; }
+  rt_debounce = setTimeout(async () => {
+    const { data, error } = await client.from('clientes').select('id, nombre, direccion').eq('sucursal_id', sucursalSeleccionada).ilike('nombre', `%${termino}%`).limit(8);
+    caja.innerHTML = '';
+    if(error || !data){ caja.classList.add('hidden'); return; }
+    const yaIncluidos = new Set(rt_clientesPlantilla.map(pc => pc.cliente_id));
+    data.filter(c => !yaIncluidos.has(c.id)).forEach(c => {
+      const div = document.createElement('div'); div.className = 'suggestion';
+      div.innerHTML = `<div>${c.nombre}</div><div class="addr">${c.direccion||'sin dirección'}</div>`;
+      div.onclick = () => rt_agregarCliente(c);
+      caja.appendChild(div);
+    });
+    caja.classList.remove('hidden');
+  }, 300);
+}
+
+async function rt_agregarCliente(c){
+  document.getElementById('rt_sugerencias').classList.add('hidden');
+  document.getElementById('rt_buscarCliente').value = '';
+  const siguienteOrden = rt_clientesPlantilla.length > 0 ? Math.max(...rt_clientesPlantilla.map(pc=>pc.orden)) + 1 : 1;
+  const { error } = await client.from('plantilla_clientes').insert({ plantilla_id: rt_plantillaActual.id, cliente_id: c.id, orden: siguienteOrden, obligatorio: true });
+  const msg = document.getElementById('rt_editorMsg');
+  if(error){ msg.innerHTML = `<div class="msg msg-err">${error.message}</div>`; return; }
+  msg.innerHTML = '';
+  await rt_registrarCambio(`Agregó a ${c.nombre}`);
+  await rt_cargarClientesPlantilla();
+}
+
+async function rt_toggleObligatorio(i){
+  const pc = rt_clientesPlantilla[i];
+  const nuevoValor = !pc.obligatorio;
+  const { error } = await client.from('plantilla_clientes').update({ obligatorio: nuevoValor }).eq('id', pc.id);
+  if(error){ document.getElementById('rt_editorMsg').innerHTML = `<div class="msg msg-err">${error.message}</div>`; return; }
+  await rt_registrarCambio(`Marcó a ${pc.clientes?.nombre} como ${nuevoValor?'obligatoria':'condicional'}`);
+  await rt_cargarClientesPlantilla();
+}
+
+async function rt_mover(i, direccion){
+  const j = i + direccion;
+  if(j < 0 || j >= rt_clientesPlantilla.length) return;
+  const a = rt_clientesPlantilla[i], b = rt_clientesPlantilla[j];
+  await client.from('plantilla_clientes').update({ orden: b.orden }).eq('id', a.id);
+  await client.from('plantilla_clientes').update({ orden: a.orden }).eq('id', b.id);
+  await rt_registrarCambio(`Cambió el orden de ${a.clientes?.nombre}`);
+  await rt_cargarClientesPlantilla();
+}
+
+async function rt_quitarCliente(i){
+  const pc = rt_clientesPlantilla[i];
+  if(!confirm(`¿Quitar a ${pc.clientes?.nombre} de esta plantilla?`)) return;
+  const { error } = await client.from('plantilla_clientes').delete().eq('id', pc.id);
+  if(error){ document.getElementById('rt_editorMsg').innerHTML = `<div class="msg msg-err">${error.message}</div>`; return; }
+  await rt_registrarCambio(`Quitó a ${pc.clientes?.nombre}`);
+  await rt_cargarClientesPlantilla();
 }
 </script>
 </body>
