@@ -482,7 +482,7 @@
     </div>
 
     <div class="card">
-      <h2>Plantillas de Routing <span style="font-family:var(--mono);font-size:10.5px;color:var(--ink-soft);font-weight:400;">(de la sucursal elegida arriba)</span></h2>
+      <h2>Plantillas de Routing <span id="rt_nombreSucursal" class="badge badge-dim"></span></h2>
       <div class="card-body">
         <div id="rt_listaPlantillas" style="margin-bottom:16px;"></div>
         <div id="rt_msgNueva"></div>
@@ -1849,6 +1849,8 @@ async function bd_importarCsv(){
 let rt_plantillaActual = null, rt_clientesPlantilla = [], rt_debounce = null;
 
 async function rt_cargarPlantillas(){
+  const nombreSuc = document.getElementById('selectSucursal').selectedOptions[0]?.textContent || '';
+  document.getElementById('rt_nombreSucursal').textContent = nombreSuc;
   const { data, error } = await client.from('plantillas_routing').select('*').eq('sucursal_id', sucursalSeleccionada).order('nombre');
   const cont = document.getElementById('rt_listaPlantillas'); cont.innerHTML = '';
   if(error){ cont.innerHTML = `<div class="msg msg-err">${error.message}</div>`; return; }
@@ -1956,9 +1958,9 @@ async function rt_agregarCliente(c){
   const { error } = await client.from('plantilla_clientes').insert({ plantilla_id: rt_plantillaActual.id, cliente_id: c.id, orden: siguienteOrden, obligatorio: true });
   const msg = document.getElementById('rt_editorMsg');
   if(error){ msg.innerHTML = `<div class="msg msg-err">${error.message}</div>`; return; }
-  msg.innerHTML = '';
   await rt_registrarCambio(`Agregó a ${c.nombre}`);
   await rt_cargarClientesPlantilla();
+  msg.innerHTML = `<div class="msg msg-ok">Guardado: se agregó ${c.nombre}.</div>`;
 }
 
 async function rt_toggleObligatorio(i){
@@ -1968,6 +1970,7 @@ async function rt_toggleObligatorio(i){
   if(error){ document.getElementById('rt_editorMsg').innerHTML = `<div class="msg msg-err">${error.message}</div>`; return; }
   await rt_registrarCambio(`Marcó a ${pc.clientes?.nombre} como ${nuevoValor?'obligatoria':'condicional'}`);
   await rt_cargarClientesPlantilla();
+  document.getElementById('rt_editorMsg').innerHTML = `<div class="msg msg-ok">Guardado.</div>`;
 }
 
 async function rt_mover(i, direccion){
@@ -1978,6 +1981,7 @@ async function rt_mover(i, direccion){
   await client.from('plantilla_clientes').update({ orden: a.orden }).eq('id', b.id);
   await rt_registrarCambio(`Cambió el orden de ${a.clientes?.nombre}`);
   await rt_cargarClientesPlantilla();
+  document.getElementById('rt_editorMsg').innerHTML = `<div class="msg msg-ok">Guardado.</div>`;
 }
 
 async function rt_quitarCliente(i){
@@ -1985,8 +1989,10 @@ async function rt_quitarCliente(i){
   if(!confirm(`¿Quitar a ${pc.clientes?.nombre} de esta plantilla?`)) return;
   const { error } = await client.from('plantilla_clientes').delete().eq('id', pc.id);
   if(error){ document.getElementById('rt_editorMsg').innerHTML = `<div class="msg msg-err">${error.message}</div>`; return; }
-  await rt_registrarCambio(`Quitó a ${pc.clientes?.nombre}`);
+  const nombreQuitado = pc.clientes?.nombre;
+  await rt_registrarCambio(`Quitó a ${nombreQuitado}`);
   await rt_cargarClientesPlantilla();
+  document.getElementById('rt_editorMsg').innerHTML = `<div class="msg msg-ok">Guardado: se quitó ${nombreQuitado}.</div>`;
 }
 </script>
 </body>
