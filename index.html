@@ -204,6 +204,10 @@
           <div class="field"><label>Fecha</label><input id="a_fecha" type="date"></div>
           <div class="field"><label>Operador que realiza el routing</label><select id="a_selectOperador"></select></div>
         </div>
+        <div class="field" style="margin-bottom:0;">
+          <label>Plantilla de routing</label>
+          <select id="a_selectPlantilla" onchange="a_cambiarPlantilla()"><option value="">Sin plantilla (armar libre)</option></select>
+        </div>
       </div>
     </div>
 
@@ -260,20 +264,29 @@
       </div>
     </div>
 
-    <div class="grid2">
-      <div class="card">
-        <h2>Envíos pendientes de asignar</h2>
-        <div class="card-body" id="a_listaPendientes"><p style="font-size:12.5px;color:var(--ink-soft);">Cargando…</p></div>
-      </div>
-      <div class="card">
-        <h2>Agregar visita (sin envío)</h2>
-        <div class="card-body">
-          <div class="field autocomplete" style="margin-bottom:0;">
-            <label>Buscar cliente</label>
-            <input id="a_buscarVisita" placeholder="Nombre del cliente…" oninput="a_buscarClientesVisita()" autocomplete="off">
-            <div id="a_sugerenciasVisita" class="suggestions hidden"></div>
+    <div id="a_bloqueSinPlantilla">
+      <div class="grid2">
+        <div class="card">
+          <h2>Envíos pendientes de asignar</h2>
+          <div class="card-body" id="a_listaPendientes"><p style="font-size:12.5px;color:var(--ink-soft);">Cargando…</p></div>
+        </div>
+        <div class="card">
+          <h2>Agregar visita (sin envío)</h2>
+          <div class="card-body">
+            <div class="field autocomplete" style="margin-bottom:0;">
+              <label>Buscar cliente</label>
+              <input id="a_buscarVisita" placeholder="Nombre del cliente…" oninput="a_buscarClientesVisita()" autocomplete="off">
+              <div id="a_sugerenciasVisita" class="suggestions hidden"></div>
+            </div>
           </div>
         </div>
+      </div>
+    </div>
+
+    <div id="a_bloqueConPlantilla" class="hidden card">
+      <h2>Clientes de la plantilla sin pedido todavía</h2>
+      <div class="card-body" id="a_listaPendientesPlantilla">
+        <p style="font-size:12.5px;color:var(--ink-soft);">Son los condicionales — si cargás un pedido para alguno, pasa solo a la lista de paradas.</p>
       </div>
     </div>
     <div class="card">
@@ -617,7 +630,7 @@ async function mostrarVista(nombre){
 }
 
 async function refrescarVistaActiva(){
-  if(vistaActiva === 'armado'){ await c_cargarEnviosDelDia(); await a_cargarOperadores(); await a_cargarPendientes(); if(!document.getElementById('a_fecha').value) document.getElementById('a_fecha').valueAsDate = new Date(); }
+  if(vistaActiva === 'armado'){ await c_cargarEnviosDelDia(); await a_cargarOperadores(); await a_cargarPendientes(); await a_cargarPlantillasSelector(); if(!document.getElementById('a_fecha').value) document.getElementById('a_fecha').valueAsDate = new Date(); }
   if(vistaActiva === 'mapa') await m_cargarOperadoresActivos();
   if(vistaActiva === 'dashboard'){ if(!document.getElementById('d_fechaDesde').value){ const h=new Date(),h7=new Date(); h7.setDate(h.getDate()-7); document.getElementById('d_fechaHasta').valueAsDate=h; document.getElementById('d_fechaDesde').valueAsDate=h7; } await d_buscar(); }
   if(vistaActiva === 'operador') await o_arrancar();
@@ -721,12 +734,18 @@ async function c_agregarEnvio(){
   const referencia = document.getElementById('c_referencia').value.trim();
   const msg = document.getElementById('c_msg');
   if(!referencia){ msg.innerHTML = `<div class="msg msg-err">Falta la referencia del remito.</div>`; return; }
-  const { error } = await client.from('envios').insert({ cliente_id: c_clienteSeleccionado.id, sucursal_id: sucursalSeleccionada, referencia, cantidad_bultos: bultos, tipo_movimiento: c_tipoMovimiento, cargado_por: usuarioActual.id });
+  const { data: nuevoEnvio, error } = await client.from('envios').insert({ cliente_id: c_clienteSeleccionado.id, sucursal_id: sucursalSeleccionada, referencia, cantidad_bultos: bultos, tipo_movimiento: c_tipoMovimiento, cargado_por: usuarioActual.id }).select().single();
   if(error){ msg.innerHTML = `<div class="msg msg-err">${error.message}</div>`; return; }
-  msg.innerHTML = `<div class="msg msg-ok">Envío agregado para ${c_clienteSeleccionado.nombre}.</div>`;
-  c_quitarCliente();
+  msg.innerHTML = `<div class="msg msg-ok">Pedido agregado para ${c_clienteSeleccionado.nombre}. Podés cargar otro pedido para el mismo cliente, o apretar "Cambiar" para buscar otro.</div>`;
+  document.getElementById('c_bultos').value = 1;
+  document.getElementById('c_referencia').value = '';
+  c_elegirTipo('entrega');
+  document.getElementById('c_referencia').focus();
   await c_cargarEnviosDelDia();
   await a_cargarPendientes();
+
+  const plantillaActiva = document.getElementById('a_selectPlantilla')?.value;
+  if(plantillaActiva){ a_integrarEnvioPlantilla(c_clienteSeleccionado, nuevoEnvio); }
 }
 
 async function c_eliminarEnvio(id){
@@ -763,12 +782,91 @@ async function c_cargarEnviosDelDia(){
 // ARMADO DE RECORRIDO
 // =====================================================================
 let a_pendientesPorCliente = {}, a_ordenParadas = [], a_debounce = null;
+let a_pendientesPlantilla = [];
 
 async function a_cargarOperadores(){
   const { data } = await client.from('perfiles').select('id, nombre_completo, rol').eq('sucursal_id', sucursalSeleccionada).order('nombre_completo');
   const sel = document.getElementById('a_selectOperador'); sel.innerHTML = '';
   (data||[]).forEach(p => { const o=document.createElement('option'); o.value=p.id; o.textContent=`${p.nombre_completo} (${p.rol})`; sel.appendChild(o); });
   if(!data || data.length===0){ const o=document.createElement('option'); o.value=''; o.textContent='No hay usuarios en esta sucursal'; sel.appendChild(o); }
+}
+
+async function a_cargarPlantillasSelector(){
+  const { data } = await client.from('plantillas_routing').select('*').eq('sucursal_id', sucursalSeleccionada).order('nombre');
+  const sel = document.getElementById('a_selectPlantilla');
+  const valorActual = sel.value;
+  sel.innerHTML = '<option value="">Sin plantilla (armar libre)</option>';
+  (data||[]).forEach(pl => { const o=document.createElement('option'); o.value=pl.id; o.textContent=pl.nombre; sel.appendChild(o); });
+  sel.value = Array.from(sel.options).some(o=>o.value===valorActual) ? valorActual : '';
+}
+
+async function a_cambiarPlantilla(){
+  const plantillaId = document.getElementById('a_selectPlantilla').value;
+  a_ordenParadas = [];
+  a_pendientesPlantilla = [];
+
+  if(!plantillaId){
+    document.getElementById('a_bloqueSinPlantilla').classList.remove('hidden');
+    document.getElementById('a_bloqueConPlantilla').classList.add('hidden');
+    a_renderOrden();
+    a_renderPendientes();
+    return;
+  }
+
+  document.getElementById('a_bloqueSinPlantilla').classList.add('hidden');
+  document.getElementById('a_bloqueConPlantilla').classList.remove('hidden');
+
+  const { data } = await client.from('plantilla_clientes').select('*, clientes(nombre, direccion)').eq('plantilla_id', plantillaId).order('orden');
+
+  (data || []).forEach(pc => {
+    const nombre = pc.clientes?.nombre || '—', direccion = pc.clientes?.direccion || '';
+    const pendiente = a_pendientesPorCliente[pc.cliente_id];
+    if(pendiente){
+      a_ordenParadas.push({ cliente_id: pc.cliente_id, nombre, direccion, tipo:'entrega', envios: pendiente.envios, ordenPlantilla: pc.orden });
+    } else if(pc.obligatorio){
+      a_ordenParadas.push({ cliente_id: pc.cliente_id, nombre, direccion, tipo:'visita', envios: [], ordenPlantilla: pc.orden });
+    } else {
+      a_pendientesPlantilla.push({ cliente_id: pc.cliente_id, nombre, direccion, ordenPlantilla: pc.orden });
+    }
+  });
+
+  a_renderOrden();
+  a_renderPendientesPlantilla();
+}
+
+function a_renderPendientesPlantilla(){
+  const cont = document.getElementById('a_listaPendientesPlantilla');
+  if(a_pendientesPlantilla.length === 0){
+    cont.innerHTML = '<p style="font-size:12.5px;color:var(--ink-soft);">Todos los clientes condicionales de esta plantilla ya tienen pedido, o no hay condicionales.</p>';
+    return;
+  }
+  cont.innerHTML = '';
+  a_pendientesPlantilla.forEach(p => {
+    const div = document.createElement('div'); div.className = 'pendiente-row'; div.style.opacity = '.5';
+    div.innerHTML = `<div style="flex:1;"><div class="pendiente-nombre">${p.nombre}</div><div class="pendiente-detalle">${p.direccion||'sin dirección'} · condicional, sin pedido todavía</div></div>`;
+    cont.appendChild(div);
+  });
+}
+
+function a_integrarEnvioPlantilla(cliente, envio){
+  let entrada = a_ordenParadas.find(p => p.cliente_id === cliente.id);
+  if(entrada){
+    entrada.envios.push(envio);
+    entrada.tipo = 'entrega';
+  } else {
+    const idxPendiente = a_pendientesPlantilla.findIndex(p => p.cliente_id === cliente.id);
+    let ordenPlantilla = Infinity, direccion = cliente.direccion || '';
+    if(idxPendiente >= 0){
+      ordenPlantilla = a_pendientesPlantilla[idxPendiente].ordenPlantilla;
+      direccion = a_pendientesPlantilla[idxPendiente].direccion;
+      a_pendientesPlantilla.splice(idxPendiente, 1);
+    }
+    const nueva = { cliente_id: cliente.id, nombre: cliente.nombre, direccion, tipo:'entrega', envios:[envio], ordenPlantilla };
+    const idxInsert = a_ordenParadas.findIndex(p => (p.ordenPlantilla ?? Infinity) > ordenPlantilla);
+    if(idxInsert === -1) a_ordenParadas.push(nueva); else a_ordenParadas.splice(idxInsert, 0, nueva);
+  }
+  a_renderOrden();
+  a_renderPendientesPlantilla();
 }
 
 async function a_cargarPendientes(){
@@ -888,6 +986,10 @@ async function a_confirmarRecorrido(){
   msg.innerHTML = `<div class="msg msg-ok">Recorrido Nº ${recorrido.numero_recorrido} confirmado — ${a_ordenParadas.length} clientes, ${totalBultosRecorrido} bultos.</div>`;
   a_generarRemito(recorrido);
   a_ordenParadas = [];
+  a_pendientesPlantilla = [];
+  document.getElementById('a_selectPlantilla').value = '';
+  document.getElementById('a_bloqueConPlantilla').classList.add('hidden');
+  document.getElementById('a_bloqueSinPlantilla').classList.remove('hidden');
   await a_cargarPendientes();
 }
 
