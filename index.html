@@ -313,6 +313,11 @@
       <div class="card">
         <div id="m_mapa"></div>
         <div class="live-pill hidden" id="m_livePill"><span class="pulse"></span> EN VIVO</div>
+        <div style="font-size:10.5px;color:var(--ink-soft);padding:6px 16px 12px;line-height:1.5;">
+          <span id="m_snapEstado"></span><br>
+          Línea punteada roja: recorrido ajustado a calles (OSRM · © OpenStreetMap) · línea gris fina: lecturas GPS sin ajustar.<br>
+          Círculos numerados = ubicación de cada cliente (gris: pendiente · verde: entregada · azul: visitada · rojo: no entregada) · punto blanco = donde se marcó.
+        </div>
       </div>
     </div>
     <div class="card hidden" id="m_cardParadas">
@@ -355,6 +360,10 @@
         <div class="stop-list" id="d_listaParadasReplay"></div>
         <div id="d_mapaReplay"></div>
       </div>
+      <div style="font-size:10.5px;color:var(--ink-soft);padding:8px 16px 12px;line-height:1.5;">
+        <span id="d_snapEstado"></span><br>
+        Línea punteada azul: recorrido ajustado a calles (OSRM · © OpenStreetMap) · línea gris fina: lecturas GPS sin ajustar · círculos numerados: ubicación de cada cliente · punto blanco: donde se marcó la parada.
+      </div>
     </div>
   </div>
 
@@ -384,7 +393,7 @@
       </div>
       <div id="o_listaParadas"></div>
       <button id="o_btnFinalizar" class="btn-ghost hidden" style="width:100%;margin-top:10px;" onclick="o_finalizarRecorrido()">Finalizar recorrido</button>
-      <div class="gps-note hidden" id="o_gpsNote"><span class="pulse"></span> Compartiendo ubicación en vivo</div>
+      <div class="gps-note hidden" id="o_gpsNote"><span class="pulse"></span> Compartiendo ubicación en vivo · mantené esta pantalla abierta y encendida</div>
 
       <div class="card" style="margin-top:18px;">
         <h2>Registrar algo no previsto</h2>
@@ -1025,7 +1034,7 @@ function a_generarRemito(recorrido){
 // MAPA EN VIVO
 // =====================================================================
 let m_recorridosActivos = [], m_recorridoSeleccionadoId = null;
-let m_mapa = null, m_traza = null, m_marcadorActual = null, m_marcadoresParadas = [];
+let m_mapa = null, m_trazaRaw = null, m_trazaSnap = null, m_marcadorActual = null, m_marcadoresParadas = [], m_puntosRaw = [], m_snapToken = 0, m_snapTimer = null;
 let m_canalPos = null, m_canalParadas = null;
 
 async function m_cargarOperadoresActivos(){
@@ -1050,12 +1059,20 @@ async function m_cargarOperadoresActivos(){
       const mins = Math.round((Date.now() - new Date(r.iniciado_en).getTime()) / 60000);
       tiempo = `${Math.floor(mins/60)}h ${mins%60}m`;
     }
+    const { data: ult } = await client.from('posiciones').select('registrado_en').eq('recorrido_id', r.id).order('registrado_en', { ascending:false }).limit(1);
+    let ubic = '📍 sin ubicación todavía', ubicDemorada = true;
+    if(ult && ult.length){
+      const seg = Math.round((Date.now() - new Date(ult[0].registrado_en).getTime()) / 1000);
+      ubicDemorada = seg > 180;
+      ubic = '📍 ' + (seg < 60 ? 'ubicación de hace instantes' : seg < 3600 ? `ubicación de hace ${Math.round(seg/60)} min` : `ubicación de hace ${Math.floor(seg/3600)} h`);
+    }
     const div = document.createElement('div'); div.className = 'op-row' + (r.id===m_recorridoSeleccionadoId?' active':'');
     div.innerHTML = `
-      <div class="op-dot"></div>
+      <div class="op-dot" style="background:${ubicDemorada ? '#B8720A' : 'var(--ok)'};"></div>
       <div style="flex:1;" onclick="m_seleccionarRecorrido('${r.id}')">
         <div class="op-name">Nº ${r.numero_recorrido} · ${r.perfiles?.nombre_completo||'—'}</div>
         <div class="op-meta">${resueltas}/${total} paradas (${pct}%) · ${tiempo}</div>
+        <div class="op-meta" style="${ubicDemorada ? 'color:var(--warn);' : ''}">${ubic}</div>
       </div>
       <button class="btn-ghost btn-small" onclick="event.stopPropagation(); m_forzarCierre('${r.id}')">Cerrar</button>
     `;
@@ -1082,34 +1099,63 @@ async function m_seleccionarRecorrido(recorridoId){
   document.getElementById('m_cardParadas').classList.remove('hidden');
   if(m_canalPos) client.removeChannel(m_canalPos);
   if(m_canalParadas) client.removeChannel(m_canalParadas);
-  if(m_traza) m_mapa.removeLayer(m_traza);
-  if(m_marcadorActual) m_mapa.removeLayer(m_marcadorActual);
+  if(m_trazaRaw){ m_mapa.removeLayer(m_trazaRaw); m_trazaRaw = null; }
+  if(m_trazaSnap){ m_mapa.removeLayer(m_trazaSnap); m_trazaSnap = null; }
+  if(m_marcadorActual){ m_mapa.removeLayer(m_marcadorActual); m_marcadorActual = null; }
+  if(m_snapTimer){ clearTimeout(m_snapTimer); m_snapTimer = null; }
+  m_puntosRaw = [];
   m_marcadoresParadas.forEach(x => m_mapa.removeLayer(x)); m_marcadoresParadas = [];
 
   await m_cargarTraza();
-  await m_cargarParadasSup();
+  await m_cargarParadasSup(true);
 
   m_canalPos = client.channel('pos-'+recorridoId).on('postgres_changes', { event:'INSERT', schema:'public', table:'posiciones', filter:`recorrido_id=eq.${recorridoId}` }, (payload) => m_agregarPuntoTraza(payload.new.lat, payload.new.lng)).subscribe();
   m_canalParadas = client.channel('par-'+recorridoId).on('postgres_changes', { event:'UPDATE', schema:'public', table:'paradas', filter:`recorrido_id=eq.${recorridoId}` }, () => { m_cargarParadasSup(); m_cargarOperadoresActivos(); }).subscribe();
 }
 
 async function m_cargarTraza(){
-  const { data } = await client.from('posiciones').select('lat,lng').eq('recorrido_id', m_recorridoSeleccionadoId).order('registrado_en',{ascending:true});
-  if(!data || data.length===0) return;
-  const puntos = data.map(p=>[p.lat,p.lng]);
-  m_traza = L.polyline(puntos, { color:'#E8262A', weight:3, dashArray:'1 8' }).addTo(m_mapa);
-  const ultimo = puntos[puntos.length-1];
-  m_marcadorActual = L.circleMarker(ultimo, { radius:8, color:'#fff', weight:2, fillColor:'#E8262A', fillOpacity:1 }).addTo(m_mapa);
-  m_mapa.setView(ultimo, 15);
+  const data = await traerTodasLasPosiciones(m_recorridoSeleccionadoId);
+  m_puntosRaw = data.map(p => ({ lat:p.lat, lng:p.lng }));
+  m_dibujarTrazaRaw();
+  if(m_puntosRaw.length){ const u = m_puntosRaw[m_puntosRaw.length-1]; m_marcarPosicionActual([u.lat, u.lng]); }
+  m_snapear();
 }
 
-function m_agregarPuntoTraza(lat,lng){
-  const punto = [lat,lng];
-  if(!m_traza) m_traza = L.polyline([punto], { color:'#E8262A', weight:3, dashArray:'1 8' }).addTo(m_mapa);
-  else m_traza.addLatLng(punto);
-  if(m_marcadorActual) m_mapa.removeLayer(m_marcadorActual);
-  m_marcadorActual = L.circleMarker(punto, { radius:8, color:'#fff', weight:2, fillColor:'#E8262A', fillOpacity:1 }).addTo(m_mapa);
-  m_mapa.panTo(punto);
+function m_dibujarTrazaRaw(){
+  const ll = m_puntosRaw.map(p => [p.lat, p.lng]);
+  if(!m_trazaRaw) m_trazaRaw = L.polyline(ll, { color:'#8A94A8', weight:2, opacity:.55 }).addTo(m_mapa);
+  else m_trazaRaw.setLatLngs(ll);
+}
+
+function m_marcarPosicionActual(ll){
+  if(!m_marcadorActual) m_marcadorActual = L.circleMarker(ll, { radius:9, color:'#fff', weight:3, fillColor:'#E8262A', fillOpacity:1 }).bindTooltip('Operador (última posición)').addTo(m_mapa);
+  else m_marcadorActual.setLatLng(ll);
+  m_marcadorActual.bringToFront();
+}
+
+function m_agregarPuntoTraza(lat, lng){
+  m_puntosRaw.push({ lat, lng });
+  m_dibujarTrazaRaw();
+  m_marcarPosicionActual([lat, lng]);
+  if(!m_mapa.getBounds().contains([lat, lng])) m_mapa.panTo([lat, lng]);
+  m_programarSnap();
+}
+
+function m_programarSnap(){
+  if(m_snapTimer) return;
+  m_snapTimer = setTimeout(() => { m_snapTimer = null; m_snapear(); }, 45000);
+}
+
+async function m_snapear(){
+  const token = ++m_snapToken;
+  const estado = document.getElementById('m_snapEstado');
+  const r = await snapearTraza(m_recorridoSeleccionadoId, m_puntosRaw, () => token === m_snapToken, (segs, ok, total) => {
+    if(!m_trazaSnap) m_trazaSnap = L.polyline(segs, { color:'#E8262A', weight:4, dashArray:'1 9', lineCap:'round' }).addTo(m_mapa);
+    else m_trazaSnap.setLatLngs(segs);
+    if(m_marcadorActual) m_marcadorActual.bringToFront();
+    if(estado) estado.textContent = `Ajustando a calles… ${ok}/${total} tramos.`;
+  });
+  if(token === m_snapToken && r && estado) estado.textContent = textoEstadoSnap(r);
 }
 
 const COLOR_ESTADO = { entregado:'#2F9E44', visitado:'#1B2A4A', no_entregado_ausente:'#C92A2A', no_entregado_rechazado:'#C92A2A', no_entregado_direccion_incorrecta:'#C92A2A', reprogramado:'#B8720A', pendiente:'#D8D2C2' };
@@ -1121,20 +1167,184 @@ function claseBadgeEstado(estado){
   return 'badge-dim';
 }
 
-async function m_cargarParadasSup(){
-  const { data } = await client.from('paradas').select('*, clientes(nombre)').eq('recorrido_id', m_recorridoSeleccionadoId).order('orden');
+// ---------- Utilidades de trayecto, verificación de visitas y ajuste a calles ----------
+function distM(a, b){
+  const la1 = Array.isArray(a) ? a[0] : a.lat, ln1 = Array.isArray(a) ? a[1] : a.lng;
+  const la2 = Array.isArray(b) ? b[0] : b.lat, ln2 = Array.isArray(b) ? b[1] : b.lng;
+  const R = 6371000, rad = Math.PI/180;
+  const dLat = (la2-la1)*rad, dLng = (ln2-ln1)*rad;
+  const s = Math.sin(dLat/2)**2 + Math.cos(la1*rad)*Math.cos(la2*rad)*Math.sin(dLng/2)**2;
+  return R*2*Math.atan2(Math.sqrt(s), Math.sqrt(1-s));
+}
+
+// Trae TODAS las posiciones de un recorrido (Supabase devuelve como máximo 1000 filas por consulta)
+async function traerTodasLasPosiciones(recorridoId){
+  const todas = [], PAGINA = 1000;
+  let desde = 0;
+  while(true){
+    const { data, error } = await client.from('posiciones').select('lat,lng,registrado_en')
+      .eq('recorrido_id', recorridoId)
+      .order('registrado_en', { ascending:true }).order('id', { ascending:true })
+      .range(desde, desde + PAGINA - 1);
+    if(error || !data) break;
+    todas.push(...data);
+    if(data.length < PAGINA) break;
+    desde += PAGINA;
+  }
+  return todas;
+}
+
+function iconoParada(orden, estado){
+  const bg = (estado === 'pendiente' || !COLOR_ESTADO[estado]) ? '#8A94A8' : COLOR_ESTADO[estado];
+  return L.divIcon({
+    className: '', iconSize: [26,26], iconAnchor: [13,13],
+    html: `<div style="background:${bg};color:#fff;border:2px solid #fff;border-radius:50%;width:26px;height:26px;display:flex;align-items:center;justify-content:center;font:600 11px Poppins,sans-serif;box-shadow:0 1px 4px rgba(0,0,0,.45);">${orden}</div>`
+  });
+}
+
+const VERIF_OK_M = 100, VERIF_DUDOSA_M = 250;
+
+function distPuntoSegmentoM(p, a, b){
+  const rad = Math.PI/180, kx = 111320*Math.cos(p.lat*rad), ky = 110540;
+  const ax = (a.lng-p.lng)*kx, ay = (a.lat-p.lat)*ky, bx = (b.lng-p.lng)*kx, by = (b.lat-p.lat)*ky;
+  const dx = bx-ax, dy = by-ay, l2 = dx*dx + dy*dy;
+  let t = l2 ? -(ax*dx + ay*dy)/l2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(ax + t*dx, ay + t*dy);
+}
+
+function distMinimaATrayecto(cli, puntos){
+  if(!puntos || puntos.length === 0) return null;
+  let min = distM(cli, puntos[0]);
+  for(let i = 1; i < puntos.length; i++){
+    const a = puntos[i-1], b = puntos[i];
+    const d = distM(cli, b);
+    if(d < min) min = d;
+    if(distM(a, b) <= 150){ const ds = distPuntoSegmentoM(cli, a, b); if(ds < min) min = ds; }
+  }
+  return min;
+}
+
+function verificarParada(p, puntos){
+  if(p.estado === 'pendiente') return { nivel:'pendiente', texto:'Pendiente', distancia:null };
+  const cli = (p.clientes?.lat != null && p.clientes?.lng != null) ? { lat:p.clientes.lat, lng:p.clientes.lng } : null;
+  if(!cli) return { nivel:'sin_coord', texto:'No verificable: el cliente no tiene ubicación cargada', distancia:null };
+  const candidatos = [];
+  const dT = distMinimaATrayecto(cli, puntos);
+  if(dT != null) candidatos.push(dT);
+  if(p.lat_registrada != null && p.lng_registrada != null) candidatos.push(distM(cli, { lat:p.lat_registrada, lng:p.lng_registrada }));
+  if(candidatos.length === 0) return { nivel:'sin_datos', texto:'Sin datos de ubicación del operador', distancia:null };
+  const d = Math.round(Math.min(...candidatos));
+  if(d <= VERIF_OK_M) return { nivel:'ok', texto:`Verificada: pasó a ${d} m`, distancia:d };
+  if(d <= VERIF_DUDOSA_M) return { nivel:'dudosa', texto:`A revisar: pasó a ${d} m`, distancia:d };
+  return { nivel:'no', texto:`No verificada: lo más cerca que pasó fue ${d} m`, distancia:d };
+}
+
+function claseBadgeVerif(nivel){
+  return nivel === 'ok' ? 'badge-ok' : nivel === 'dudosa' ? 'badge-warn' : nivel === 'no' ? 'badge-danger' : 'badge-dim';
+}
+
+// Ajuste de la traza GPS a las calles (servicio público de OpenStreetMap, perfil peatonal)
+const SNAP_BASE = 'https://routing.openstreetmap.de/routed-foot/match/v1/driving/';
+const SNAP_TROZO = 60;
+let snapUltimaLlamada = 0, snapPausaHasta = 0;
+const snapCache = {};
+
+function simplificarTraza(puntos, minM){
+  const out = [];
+  puntos.forEach(p => { if(out.length === 0 || distM(out[out.length-1], p) >= minM) out.push(p); });
+  const ult = puntos[puntos.length-1];
+  if(ult && out[out.length-1] !== ult) out.push(ult);
+  return out;
+}
+
+async function snapTrozo(coords){
+  if(Date.now() < snapPausaHasta) return null;
+  const espera = Math.max(0, 1100 - (Date.now() - snapUltimaLlamada));
+  if(espera) await new Promise(r => setTimeout(r, espera));
+  snapUltimaLlamada = Date.now();
+  const coordStr = coords.map(c => `${c.lng.toFixed(6)},${c.lat.toFixed(6)}`).join(';');
+  const radios = coords.map(() => 30).join(';');
+  const url = `${SNAP_BASE}${coordStr}?geometries=geojson&overview=full&radiuses=${radios}`;
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 12000);
+  try{
+    const res = await fetch(url, { signal: ctrl.signal });
+    clearTimeout(t);
+    if(!res.ok){ snapPausaHasta = Date.now() + 2*60*1000; return null; }
+    const json = await res.json();
+    if(json.code !== 'Ok' || !json.matchings || json.matchings.length === 0) return null;
+    return json.matchings.map(m => m.geometry.coordinates.map(c => [c[1], c[0]]));
+  }catch(e){
+    clearTimeout(t);
+    snapPausaHasta = Date.now() + 10*60*1000;   // servicio caído o bloqueado: no insistir por un rato
+    return null;
+  }
+}
+
+async function snapearTraza(recId, puntosRaw, vigente, alActualizar){
+  const pts = simplificarTraza(puntosRaw, 20);
+  if(pts.length < 2) return { ajustados:0, total:0 };
+  const paso = SNAP_TROZO - 1;
+  const segmentos = [];
+  let ajustados = 0, total = 0;
+  for(let i = 0, k = 0; i < pts.length - 1; i += paso, k++){
+    if(!vigente()) return null;
+    const trozo = pts.slice(i, i + SNAP_TROZO);
+    if(trozo.length < 2) break;
+    total++;
+    const clave = `snap:${recId}:${k}:${trozo.length}`;
+    let segs = snapCache[clave];
+    if(!segs){ try{ const g = localStorage.getItem(clave); if(g) segs = JSON.parse(g); }catch(e){} }
+    if(!segs){
+      const m = await snapTrozo(trozo);
+      if(!vigente()) return null;
+      if(m){
+        segs = m; snapCache[clave] = m;
+        if(trozo.length === SNAP_TROZO){ try{ localStorage.setItem(clave, JSON.stringify(m)); }catch(e){} }
+      }
+    }
+    if(segs) ajustados++;
+    segmentos.push(...(segs || [trozo.map(p => [p.lat, p.lng])]));
+    alActualizar(segmentos.slice(), ajustados, total);
+  }
+  return { ajustados, total };
+}
+
+function textoEstadoSnap(r){
+  if(!r || r.total === 0) return '';
+  if(r.ajustados === r.total) return `Recorrido ajustado a calles (${r.total} tramo${r.total===1?'':'s'}).`;
+  if(r.ajustados === 0) return 'No se pudo ajustar a calles (el servicio externo no respondió): se muestra la línea GPS directa.';
+  return `Ajustado a calles en ${r.ajustados} de ${r.total} tramos; el resto se muestra en línea directa.`;
+}
+
+async function m_cargarParadasSup(ajustar){
+  const { data } = await client.from('paradas').select('*, clientes(nombre, lat, lng)').eq('recorrido_id', m_recorridoSeleccionadoId).order('orden');
   m_marcadoresParadas.forEach(x => m_mapa.removeLayer(x)); m_marcadoresParadas = [];
   const cont = document.getElementById('m_listaParadasSup'); cont.innerHTML = '';
+  const bounds = [];
   (data||[]).forEach(p => {
+    const tieneCoord = p.clientes?.lat != null && p.clientes?.lng != null;
     const div = document.createElement('div'); div.className = 'stop-item';
-    div.innerHTML = `<div class="stop-num">${p.orden}</div><div class="n">${p.clientes?.nombre||'—'}</div><span class="badge ${claseBadgeEstado(p.estado)}">${p.estado.replaceAll('_',' ')}</span>`;
+    div.innerHTML = `<div class="stop-num">${p.orden}</div><div class="n">${p.clientes?.nombre||'—'}${tieneCoord ? '' : '<div class="hora">sin ubicación del cliente en el mapa</div>'}</div><span class="badge ${claseBadgeEstado(p.estado)}">${p.estado.replaceAll('_',' ')}</span>`;
     cont.appendChild(div);
-    if(p.lat_registrada && p.lng_registrada){
-      const color = COLOR_ESTADO[p.estado] || '#D8D2C2';
-      const m = L.circleMarker([p.lat_registrada,p.lng_registrada], { radius:7, color:'#fff', weight:2, fillColor:color, fillOpacity:1 }).bindTooltip(p.clientes?.nombre||'').addTo(m_mapa);
-      m_marcadoresParadas.push(m);
+    if(tieneCoord){
+      const m = L.marker([p.clientes.lat, p.clientes.lng], { icon: iconoParada(p.orden, p.estado) })
+        .bindTooltip(`${p.orden}. ${p.clientes?.nombre||''} — ${p.estado.replaceAll('_',' ')}`).addTo(m_mapa);
+      m_marcadoresParadas.push(m); bounds.push([p.clientes.lat, p.clientes.lng]);
+      div.style.cursor = 'pointer'; div.onclick = () => m_mapa.setView([p.clientes.lat, p.clientes.lng], 17);
+    }
+    if(p.lat_registrada != null && p.lng_registrada != null){
+      const color = COLOR_ESTADO[p.estado] || '#8A94A8';
+      const r2 = L.circleMarker([p.lat_registrada, p.lng_registrada], { radius:4, color, weight:2, fillColor:'#fff', fillOpacity:1 })
+        .bindTooltip(`Marcada acá: ${p.orden}. ${p.clientes?.nombre||''}`).addTo(m_mapa);
+      m_marcadoresParadas.push(r2);
     }
   });
+  if(ajustar){
+    if(m_puntosRaw.length){ const u = m_puntosRaw[m_puntosRaw.length-1]; bounds.push([u.lat, u.lng]); }
+    if(bounds.length) m_mapa.fitBounds(bounds, { padding:[40,40], maxZoom:16 });
+  }
 }
 
 // =====================================================================
@@ -1217,30 +1427,61 @@ function d_renderResumen(data){
   `).join('');
 }
 
+let d_snapToken = 0;
+
 async function d_abrirReplay(r){
   document.getElementById('d_cardReplay').classList.remove('hidden');
   document.getElementById('d_tituloReplay').textContent = `Recorrido Nº ${r.numero_recorrido} — ${r.operador_nombre} — ${r.fecha}`;
   document.getElementById('d_cardReplay').scrollIntoView({ behavior:'smooth' });
   if(!d_mapa){ d_mapa = L.map('d_mapaReplay'); L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution:'&copy; OpenStreetMap contributors' }).addTo(d_mapa); }
   d_capas.forEach(c => d_mapa.removeLayer(c)); d_capas = [];
+  const token = ++d_snapToken;
+  const estadoSnap = document.getElementById('d_snapEstado');
+  if(estadoSnap) estadoSnap.textContent = 'Cargando recorrido…';
 
-  const { data: posiciones } = await client.from('posiciones').select('lat,lng').eq('recorrido_id', r.id).order('registrado_en',{ascending:true});
-  const { data: paradas } = await client.from('paradas').select('*, clientes(nombre)').eq('recorrido_id', r.id).order('orden');
+  const posiciones = await traerTodasLasPosiciones(r.id);
+  const { data: paradas } = await client.from('paradas').select('*, clientes(nombre, lat, lng)').eq('recorrido_id', r.id).order('orden');
+  if(token !== d_snapToken) return;
+
+  const puntos = posiciones.map(p => ({ lat:p.lat, lng:p.lng }));
   const bounds = [];
-  if(posiciones && posiciones.length>0){ const puntos = posiciones.map(p=>[p.lat,p.lng]); const linea = L.polyline(puntos, { color:'#1B2A4A', weight:3, opacity:.5 }).addTo(d_mapa); d_capas.push(linea); puntos.forEach(p=>bounds.push(p)); }
+  if(puntos.length > 0){
+    const ll = puntos.map(p => [p.lat, p.lng]);
+    d_capas.push(L.polyline(ll, { color:'#8A94A8', weight:2, opacity:.55 }).addTo(d_mapa));
+    ll.forEach(q => bounds.push(q));
+  }
 
   const lista = document.getElementById('d_listaParadasReplay'); lista.innerHTML = '';
-  (paradas||[]).forEach(p => {
+  const todas = paradas || [];
+  const verifs = todas.map(p => verificarParada(p, puntos));
+  const cuenta = n => verifs.filter(v => v.nivel === n).length;
+  const marcadas = todas.filter(p => p.estado !== 'pendiente').length;
+  const resumen = document.createElement('div');
+  resumen.style.cssText = 'padding:10px 14px;font-size:12px;background:var(--paper);border-bottom:1px solid var(--line);line-height:1.6;';
+  resumen.innerHTML = `<b>Verificación de visitas</b> (${marcadas} marcadas de ${todas.length}; ${puntos.length} puntos GPS)<br>✔ ${cuenta('ok')} verificadas · ⚠ ${cuenta('dudosa')} a revisar · ✖ ${cuenta('no')} no verificadas · ${cuenta('sin_coord') + cuenta('sin_datos')} sin datos para verificar`;
+  lista.appendChild(resumen);
+
+  todas.forEach((p, i) => {
+    const v = verifs[i];
     const div = document.createElement('div'); div.className = 'stop-item';
     const hora = p.marcado_en ? new Date(p.marcado_en).toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'}) : 'sin marcar';
     const linkFirma = p.firma_url ? `<button class="btn-ghost btn-small" style="margin-top:4px;" onclick="d_verFirma('${p.firma_url}')">Ver firma</button>` : '';
     const datosReceptor = p.nombre_receptor ? `<div style="font-family:var(--mono);font-size:10.5px;color:var(--ink-soft);margin-top:2px;">Recibió: ${p.nombre_receptor} · DNI ${p.dni_receptor||'—'}</div>` : '';
-    div.innerHTML = `<div><div class="n">${p.orden}. ${p.clientes?.nombre||'—'}</div><div class="hora">${p.estado.replace(/_/g,' ')} · ${hora}</div>${datosReceptor}${linkFirma}</div>`;
+    const badgeVerif = v.nivel === 'pendiente' ? '' : `<div style="margin-top:3px;"><span class="badge ${claseBadgeVerif(v.nivel)}">${v.texto}</span></div>`;
+    div.innerHTML = `<div><div class="n">${p.orden}. ${p.clientes?.nombre||'—'}</div><div class="hora">${p.estado.replace(/_/g,' ')} · ${hora}</div>${badgeVerif}${datosReceptor}${linkFirma}</div>`;
     lista.appendChild(div);
-    if(p.lat_registrada && p.lng_registrada){
-      const color = COLOR_ESTADO[p.estado] || '#D8D2C2';
-      const m = L.circleMarker([p.lat_registrada,p.lng_registrada], { radius:7, color:'#fff', weight:2, fillColor:color, fillOpacity:1 }).bindTooltip(`${p.orden}. ${p.clientes?.nombre||''}`).addTo(d_mapa);
-      d_capas.push(m); bounds.push([p.lat_registrada,p.lng_registrada]);
+
+    const cli = (p.clientes?.lat != null && p.clientes?.lng != null) ? [p.clientes.lat, p.clientes.lng] : null;
+    if(cli){
+      d_capas.push(L.marker(cli, { icon: iconoParada(p.orden, p.estado) }).bindTooltip(`${p.orden}. ${p.clientes?.nombre||''} — ${v.texto}`).addTo(d_mapa));
+      bounds.push(cli);
+      div.style.cursor = 'pointer';
+      div.onclick = (ev) => { if(ev.target.tagName === 'BUTTON') return; d_mapa.setView(cli, 17); };
+    }
+    if(p.lat_registrada != null && p.lng_registrada != null){
+      const color = COLOR_ESTADO[p.estado] || '#8A94A8';
+      d_capas.push(L.circleMarker([p.lat_registrada, p.lng_registrada], { radius:4, color, weight:2, fillColor:'#fff', fillOpacity:1 }).bindTooltip(`Marcada acá: ${p.orden}. ${p.clientes?.nombre||''}`).addTo(d_mapa));
+      bounds.push([p.lat_registrada, p.lng_registrada]);
     }
   });
   setTimeout(() => { d_mapa.invalidateSize(); if(bounds.length>0) d_mapa.fitBounds(bounds,{padding:[30,30]}); else d_mapa.setView([-32.9468,-60.6393],13); }, 100);
@@ -1253,11 +1494,19 @@ async function d_abrirReplay(r){
     lista.appendChild(titulo);
     imprevistos.forEach(imp => {
       const div = document.createElement('div'); div.className = 'stop-item';
-      const hora = new Date(imp.registrado_en).toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'});
-      div.innerHTML = `<div><div class="n">${hora}${imp.pedido ? ' · Pedido '+imp.pedido : ''}</div><div class="hora">${imp.detalle}</div></div>`;
+      const horaImp = new Date(imp.registrado_en).toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'});
+      div.innerHTML = `<div><div class="n">${horaImp}${imp.pedido ? ' · Pedido '+imp.pedido : ''}</div><div class="hora">${imp.detalle}</div></div>`;
       lista.appendChild(div);
     });
   }
+
+  let snapLayer = null;
+  const rr = await snapearTraza(r.id, puntos, () => token === d_snapToken, (segs, ok, total) => {
+    if(!snapLayer){ snapLayer = L.polyline(segs, { color:'#1B2A4A', weight:4, dashArray:'1 9', lineCap:'round' }).addTo(d_mapa); d_capas.push(snapLayer); }
+    else snapLayer.setLatLngs(segs);
+    if(estadoSnap) estadoSnap.textContent = `Ajustando a calles… ${ok}/${total} tramos.`;
+  });
+  if(token === d_snapToken && rr && estadoSnap) estadoSnap.textContent = textoEstadoSnap(rr);
 }
 async function d_verFirma(path){
   const { data, error } = await client.storage.from('firmas').createSignedUrl(path, 300);
@@ -1272,9 +1521,12 @@ async function d_exportarDetalle(){
 
   const filas = [];
   for(const r of d_ultimoResultado){
-    const { data: paradas } = await client.from('paradas').select('*, clientes(nombre, direccion)').eq('recorrido_id', r.id).order('orden');
+    const { data: paradas } = await client.from('paradas').select('*, clientes(nombre, direccion, lat, lng)').eq('recorrido_id', r.id).order('orden');
+    const puntosR = (await traerTodasLasPosiciones(r.id)).map(q => ({ lat:q.lat, lng:q.lng }));
     for(const p of (paradas || [])){
       const horaParada = p.marcado_en ? new Date(p.marcado_en).toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'}) : '';
+      const verif = verificarParada(p, puntosR);
+      const verifCols = { 'Dist. mín. recorrido-cliente (m)': verif.distancia ?? '', 'Verificación de visita': verif.nivel === 'pendiente' ? '' : verif.texto };
       if(p.tipo === 'entrega'){
         const { data: envios } = await client.from('envios').select('*').eq('parada_id', p.id);
         if(envios && envios.length > 0){
@@ -1289,7 +1541,7 @@ async function d_exportarDetalle(){
               'Dirección': p.clientes?.direccion || '',
               'Tipo parada': 'Entrega',
               'Estado parada': p.estado,
-              'Hora de la visita': horaParada,
+              'Hora de la visita': horaParada, ...verifCols,
               'Referencia pedido': e.referencia,
               'Tipo movimiento': e.tipo_movimiento === 'retiro' ? 'Retiro' : 'Entrega',
               'Estado pedido': e.estado === 'completado' ? 'Completado' : e.estado === 'no_realizado' ? 'No realizado' : 'Pendiente',
@@ -1298,10 +1550,10 @@ async function d_exportarDetalle(){
             });
           });
         } else {
-          filas.push({ 'Nº Recorrido': r.numero_recorrido, 'Fecha': r.fecha, 'Realiza': r.operador_nombre, 'Orden parada': p.orden, 'Cliente': p.clientes?.nombre||'', 'Dirección': p.clientes?.direccion||'', 'Tipo parada':'Entrega', 'Estado parada': p.estado, 'Hora de la visita': horaParada, 'Referencia pedido':'', 'Tipo movimiento':'', 'Estado pedido':'', 'Hora del pedido':'', 'Bultos':'' });
+          filas.push({ 'Nº Recorrido': r.numero_recorrido, 'Fecha': r.fecha, 'Realiza': r.operador_nombre, 'Orden parada': p.orden, 'Cliente': p.clientes?.nombre||'', 'Dirección': p.clientes?.direccion||'', 'Tipo parada':'Entrega', 'Estado parada': p.estado, 'Hora de la visita': horaParada, ...verifCols, 'Referencia pedido':'', 'Tipo movimiento':'', 'Estado pedido':'', 'Hora del pedido':'', 'Bultos':'' });
         }
       } else {
-        filas.push({ 'Nº Recorrido': r.numero_recorrido, 'Fecha': r.fecha, 'Realiza': r.operador_nombre, 'Orden parada': p.orden, 'Cliente': p.clientes?.nombre||'', 'Dirección': p.clientes?.direccion||'', 'Tipo parada':'Visita', 'Estado parada': p.estado, 'Hora de la visita': horaParada, 'Referencia pedido':'', 'Tipo movimiento':'', 'Estado pedido':'', 'Hora del pedido':'', 'Bultos':'' });
+        filas.push({ 'Nº Recorrido': r.numero_recorrido, 'Fecha': r.fecha, 'Realiza': r.operador_nombre, 'Orden parada': p.orden, 'Cliente': p.clientes?.nombre||'', 'Dirección': p.clientes?.direccion||'', 'Tipo parada':'Visita', 'Estado parada': p.estado, 'Hora de la visita': horaParada, ...verifCols, 'Referencia pedido':'', 'Tipo movimiento':'', 'Estado pedido':'', 'Hora del pedido':'', 'Bultos':'' });
       }
     }
   }
@@ -1368,7 +1620,7 @@ const ESTADOS_ENTREGA = [
 const ESTADOS_VISITA = [ { valor:'visitado', label:'Visitado', firma:false }, { valor:'reprogramado', label:'Reprogramado', firma:false } ];
 
 let o_recorridoActual = null, o_paradas = [], o_paradaEnEdicion = null, o_estadoElegido = null, o_firmaTrazada = false, o_totalRecorridosHoy = 0;
-let o_watchId = null, o_ultimaPos = null;
+let o_watchId = null, o_ultimaPos = null, o_ultimoEnvioTs = 0, o_wakeLock = null;
 
 async function o_arrancar(){
   const hoy = new Date().toISOString().slice(0,10);
@@ -1471,19 +1723,48 @@ async function o_finalizarRecorrido(){
 
 function o_distanciaMetros(a,b){ const R=6371000; const dLat=(b.lat-a.lat)*Math.PI/180, dLng=(b.lng-a.lng)*Math.PI/180; const s=Math.sin(dLat/2)**2+Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLng/2)**2; return R*2*Math.atan2(Math.sqrt(s),Math.sqrt(1-s)); }
 
+async function o_pedirWakeLock(){
+  try{
+    if('wakeLock' in navigator && o_recorridoActual?.estado === 'en_curso' && document.visibilityState === 'visible' && !o_wakeLock){
+      o_wakeLock = await navigator.wakeLock.request('screen');
+      o_wakeLock.addEventListener('release', () => { o_wakeLock = null; });
+    }
+  }catch(e){ /* el navegador no lo soporta o lo rechazó */ }
+}
+function o_soltarWakeLock(){ try{ if(o_wakeLock){ o_wakeLock.release(); o_wakeLock = null; } }catch(e){} }
+
+document.addEventListener('visibilitychange', () => {
+  if(document.visibilityState === 'visible' && o_watchId !== null){
+    o_pedirWakeLock();
+    // al volver a la app pedimos una posición fresca para no dejar un hueco en la traza
+    navigator.geolocation.getCurrentPosition(pos => o_procesarPosicion(pos, true), () => {}, { enableHighAccuracy:true, maximumAge:0, timeout:8000 });
+  }
+});
+
+async function o_procesarPosicion(pos, forzar){
+  if(!o_recorridoActual || o_recorridoActual.estado !== 'en_curso') return;
+  const actual = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+  const ahora = Date.now();
+  const seMovio = o_ultimaPos ? o_distanciaMetros(o_ultimaPos, actual) : Infinity;
+  const pasoTiempo = ahora - o_ultimoEnvioTs;
+  if(pos.coords.accuracy > 50 && pasoTiempo < 60000 && !forzar) return;   // descarta lecturas muy imprecisas, salvo que lleve rato sin señal
+  const debeEnviar = forzar || seMovio >= 10 || (pasoTiempo >= 30000 && seMovio >= 5);
+  if(!debeEnviar) return;
+  o_ultimaPos = actual; o_ultimoEnvioTs = ahora;
+  await client.from('posiciones').insert({ recorrido_id: o_recorridoActual.id, lat: actual.lat, lng: actual.lng });
+  if(o_mapa && !document.getElementById('o_mapaWrap').classList.contains('hidden')) o_moverMarcadorPropio();
+}
+
 function o_iniciarSeguimientoGPS(){
   if(!navigator.geolocation || o_watchId !== null) return;
-  o_watchId = navigator.geolocation.watchPosition(async (pos) => {
-    const actual = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-    if(!o_ultimaPos || o_distanciaMetros(o_ultimaPos, actual) >= 15){
-      o_ultimaPos = actual;
-      await client.from('posiciones').insert({ recorrido_id: o_recorridoActual.id, lat: actual.lat, lng: actual.lng });
-      if(o_mapa && !document.getElementById('o_mapaWrap').classList.contains('hidden')) o_moverMarcadorPropio();
-    }
-  }, (err) => console.warn('GPS:', err.message), { enableHighAccuracy:true, maximumAge:5000 });
+  o_watchId = navigator.geolocation.watchPosition(
+    (pos) => o_procesarPosicion(pos, false),
+    (err) => { console.warn('GPS:', err.message); const n = document.getElementById('o_gpsNote'); if(n) n.textContent = '⚠ No se pudo obtener la ubicación. Revisá que el navegador tenga permiso de ubicación.'; },
+    { enableHighAccuracy:true, maximumAge:0, timeout:20000 });
+  o_pedirWakeLock();
   document.getElementById('o_gpsNote').classList.remove('hidden');
 }
-function o_detenerSeguimientoGPS(){ if(o_watchId !== null){ navigator.geolocation.clearWatch(o_watchId); o_watchId = null; } }
+function o_detenerSeguimientoGPS(){ if(o_watchId !== null){ navigator.geolocation.clearWatch(o_watchId); o_watchId = null; } o_soltarWakeLock(); }
 
 function o_abrirDetalle(index){
   o_paradaEnEdicion = o_paradas[index]; o_estadoElegido = null; o_firmaTrazada = false; o_metodoConfirmidad = 'firma';
@@ -1645,8 +1926,9 @@ function o_pintarMapa(){
 
 function o_obtenerPosicionActual(){
   return new Promise((resolve) => {
-    if(!navigator.geolocation){ resolve(null); return; }
-    navigator.geolocation.getCurrentPosition((pos)=>resolve({lat:pos.coords.latitude,lng:pos.coords.longitude}), ()=>resolve(null), { timeout:4000 });
+    const respaldo = () => resolve(o_ultimaPos ? { lat:o_ultimaPos.lat, lng:o_ultimaPos.lng } : null);   // si falla, usamos la última posición conocida
+    if(!navigator.geolocation){ respaldo(); return; }
+    navigator.geolocation.getCurrentPosition((pos)=>resolve({lat:pos.coords.latitude,lng:pos.coords.longitude}), respaldo, { enableHighAccuracy:true, maximumAge:10000, timeout:8000 });
   });
 }
 
