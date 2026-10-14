@@ -315,7 +315,7 @@
         <div class="live-pill hidden" id="m_livePill"><span class="pulse"></span> EN VIVO</div>
         <div style="font-size:10.5px;color:var(--ink-soft);padding:6px 16px 12px;line-height:1.5;">
           <span id="m_snapEstado"></span><br>
-          Línea punteada roja: recorrido ajustado a calles (OSRM · © OpenStreetMap) · línea gris fina: lecturas GPS sin ajustar.<br>
+          Línea punteada roja: recorrido ajustado a calles (OSRM · © OpenStreetMap) · gris discontinua: tramo que no se pudo ajustar (se ve directo) · naranja: salto sin datos GPS (el celular no reportó ubicación en ese tramo).<br>
           Círculos numerados = ubicación de cada cliente (gris: pendiente · verde: entregada · azul: visitada · rojo: no entregada) · punto blanco = donde se marcó.
         </div>
       </div>
@@ -361,8 +361,8 @@
         <div id="d_mapaReplay"></div>
       </div>
       <div style="font-size:10.5px;color:var(--ink-soft);padding:8px 16px 12px;line-height:1.5;">
-        <span id="d_snapEstado"></span><br>
-        Línea punteada azul: recorrido ajustado a calles (OSRM · © OpenStreetMap) · línea gris fina: lecturas GPS sin ajustar · círculos numerados: ubicación de cada cliente · punto blanco: donde se marcó la parada.
+        <span id="d_snapEstado"></span> <button id="d_btnReintentarSnap" class="btn-ghost btn-small hidden" onclick="d_reintentarSnap()">Reintentar ajuste</button><br>
+        Línea punteada azul: recorrido ajustado a calles (OSRM · © OpenStreetMap) · gris discontinua: tramo que no se pudo ajustar (se ve directo) · naranja: salto sin datos GPS (el celular no reportó ubicación en ese tramo) · círculos numerados: ubicación de cada cliente · punto blanco: donde se marcó la parada.
       </div>
     </div>
   </div>
@@ -490,7 +490,12 @@
             <div class="field"><label>Dirección</label><input id="bd_editDireccion"></div>
             <div class="field"><label>Teléfono</label><input id="bd_editTelefono"></div>
           </div>
-          <p style="font-size:11.5px;color:var(--ink-soft);">Si cambiás la dirección, se vuelve a calcular la ubicación en el mapa automáticamente.</p>
+          <div class="field">
+            <label>Ubicación en el mapa (latitud, longitud)</label>
+            <input id="bd_editCoords" placeholder="Ej: -32.9468, -60.6393" autocomplete="off">
+          </div>
+          <p id="bd_editCoordsEstado" style="font-size:11.5px;color:var(--ink-soft);margin-top:-6px;"></p>
+          <p style="font-size:11.5px;color:var(--ink-soft);">Si cambiás la dirección, la ubicación se recalcula sola. Si no la encuentra, podés pegar acá las coordenadas (en Google Maps: mantené apretado sobre el lugar y copiá los dos números).</p>
           <button class="btn-primary" onclick="bd_guardarCliente()">Guardar cambios</button>
         </div>
 
@@ -1034,7 +1039,7 @@ function a_generarRemito(recorrido){
 // MAPA EN VIVO
 // =====================================================================
 let m_recorridosActivos = [], m_recorridoSeleccionadoId = null;
-let m_mapa = null, m_trazaRaw = null, m_trazaSnap = null, m_marcadorActual = null, m_marcadoresParadas = [], m_puntosRaw = [], m_snapToken = 0, m_snapTimer = null;
+let m_mapa = null, m_trazaRaw = null, m_trazaSnap = null, m_trazaDirecta = null, m_trazaHuecos = null, m_marcadorActual = null, m_marcadoresParadas = [], m_puntosRaw = [], m_snapToken = 0, m_snapTimer = null;
 let m_canalPos = null, m_canalParadas = null;
 
 async function m_cargarOperadoresActivos(){
@@ -1101,6 +1106,8 @@ async function m_seleccionarRecorrido(recorridoId){
   if(m_canalParadas) client.removeChannel(m_canalParadas);
   if(m_trazaRaw){ m_mapa.removeLayer(m_trazaRaw); m_trazaRaw = null; }
   if(m_trazaSnap){ m_mapa.removeLayer(m_trazaSnap); m_trazaSnap = null; }
+  if(m_trazaDirecta){ m_mapa.removeLayer(m_trazaDirecta); m_trazaDirecta = null; }
+  if(m_trazaHuecos){ m_mapa.removeLayer(m_trazaHuecos); m_trazaHuecos = null; }
   if(m_marcadorActual){ m_mapa.removeLayer(m_marcadorActual); m_marcadorActual = null; }
   if(m_snapTimer){ clearTimeout(m_snapTimer); m_snapTimer = null; }
   m_puntosRaw = [];
@@ -1123,7 +1130,7 @@ async function m_cargarTraza(){
 
 function m_dibujarTrazaRaw(){
   const ll = m_puntosRaw.map(p => [p.lat, p.lng]);
-  if(!m_trazaRaw) m_trazaRaw = L.polyline(ll, { color:'#8A94A8', weight:2, opacity:.55 }).addTo(m_mapa);
+  if(!m_trazaRaw) m_trazaRaw = L.polyline(ll, { color:'#8A94A8', weight:1.5, opacity:.3 }).addTo(m_mapa);
   else m_trazaRaw.setLatLngs(ll);
 }
 
@@ -1149,9 +1156,12 @@ function m_programarSnap(){
 async function m_snapear(){
   const token = ++m_snapToken;
   const estado = document.getElementById('m_snapEstado');
-  const r = await snapearTraza(m_recorridoSeleccionadoId, m_puntosRaw, () => token === m_snapToken, (segs, ok, total) => {
-    if(!m_trazaSnap) m_trazaSnap = L.polyline(segs, { color:'#E8262A', weight:4, dashArray:'1 9', lineCap:'round' }).addTo(m_mapa);
-    else m_trazaSnap.setLatLngs(segs);
+  const est = estiloSnapCapas();
+  const r = await snapearTraza(m_recorridoSeleccionadoId, m_puntosRaw, () => token === m_snapToken, (ajust, directos, huecos, ok, total) => {
+    if(!m_trazaSnap) m_trazaSnap = L.polyline(ajust, { color:'#E8262A', weight:4, dashArray:'1 9', lineCap:'round' }).addTo(m_mapa);
+    else m_trazaSnap.setLatLngs(ajust);
+    if(!m_trazaDirecta) m_trazaDirecta = L.polyline(directos, est.directo).addTo(m_mapa); else m_trazaDirecta.setLatLngs(directos);
+    if(!m_trazaHuecos) m_trazaHuecos = L.polyline(huecos, est.hueco).addTo(m_mapa); else m_trazaHuecos.setLatLngs(huecos);
     if(m_marcadorActual) m_marcadorActual.bringToFront();
     if(estado) estado.textContent = `Ajustando a calles… ${ok}/${total} tramos.`;
   });
@@ -1247,6 +1257,7 @@ function claseBadgeVerif(nivel){
 // Ajuste de la traza GPS a las calles (servicio público de OpenStreetMap, perfil peatonal)
 const SNAP_BASE = 'https://routing.openstreetmap.de/routed-foot/match/v1/driving/';
 const SNAP_TROZO = 60;
+const SNAP_SALTO_M = 100;      // un salto mayor entre dos lecturas seguidas se considera "sin datos GPS"
 let snapUltimaLlamada = 0, snapPausaHasta = 0;
 const snapCache = {};
 
@@ -1258,6 +1269,22 @@ function simplificarTraza(puntos, minM){
   return out;
 }
 
+// Parte la traza en tramos continuos; entre tramos hay un "hueco" (el celular no mandó datos)
+function partirEnTramos(puntos, maxSaltoM){
+  const tramos = [], huecos = [];
+  let actual = [];
+  puntos.forEach(p => {
+    if(actual.length && distM(actual[actual.length-1], p) > maxSaltoM){
+      const a = actual[actual.length-1];
+      huecos.push([[a.lat, a.lng], [p.lat, p.lng]]);
+      tramos.push(actual); actual = [];
+    }
+    actual.push(p);
+  });
+  if(actual.length) tramos.push(actual);
+  return { tramos, huecos };
+}
+
 async function snapTrozo(coords){
   if(Date.now() < snapPausaHasta) return null;
   const espera = Math.max(0, 1100 - (Date.now() - snapUltimaLlamada));
@@ -1267,56 +1294,68 @@ async function snapTrozo(coords){
   const radios = coords.map(() => 30).join(';');
   const url = `${SNAP_BASE}${coordStr}?geometries=geojson&overview=full&radiuses=${radios}`;
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 12000);
+  const t = setTimeout(() => ctrl.abort(), 20000);
   try{
     const res = await fetch(url, { signal: ctrl.signal });
     clearTimeout(t);
-    if(!res.ok){ snapPausaHasta = Date.now() + 2*60*1000; return null; }
+    if(!res.ok){ snapPausaHasta = Date.now() + 60*1000; return null; }
     const json = await res.json();
-    if(json.code !== 'Ok' || !json.matchings || json.matchings.length === 0) return null;
+    if(json.code !== 'Ok' || !json.matchings || json.matchings.length === 0) return null;   // este tramo no se pudo emparejar con calles
     return json.matchings.map(m => m.geometry.coordinates.map(c => [c[1], c[0]]));
   }catch(e){
     clearTimeout(t);
-    snapPausaHasta = Date.now() + 10*60*1000;   // servicio caído o bloqueado: no insistir por un rato
+    snapPausaHasta = Date.now() + (e && e.name === 'AbortError' ? 30*1000 : 5*60*1000);   // demora: reintento pronto; servicio caído/bloqueado: más espera
     return null;
   }
 }
 
+// alActualizar(ajustados[], directos[], huecos[], ok, total)
 async function snapearTraza(recId, puntosRaw, vigente, alActualizar){
-  const pts = simplificarTraza(puntosRaw, 20);
-  if(pts.length < 2) return { ajustados:0, total:0 };
+  const { tramos, huecos } = partirEnTramos(puntosRaw, SNAP_SALTO_M);
+  const ajustados = [], directos = [];
+  let ok = 0, total = 0, k = 0;
   const paso = SNAP_TROZO - 1;
-  const segmentos = [];
-  let ajustados = 0, total = 0;
-  for(let i = 0, k = 0; i < pts.length - 1; i += paso, k++){
-    if(!vigente()) return null;
-    const trozo = pts.slice(i, i + SNAP_TROZO);
-    if(trozo.length < 2) break;
-    total++;
-    const clave = `snap:${recId}:${k}:${trozo.length}`;
-    let segs = snapCache[clave];
-    if(!segs){ try{ const g = localStorage.getItem(clave); if(g) segs = JSON.parse(g); }catch(e){} }
-    if(!segs){
-      const m = await snapTrozo(trozo);
+  for(const tramo of tramos){
+    const pts = simplificarTraza(tramo, 20);
+    if(pts.length < 2){ k++; continue; }
+    for(let i = 0; i < pts.length - 1; i += paso, k++){
       if(!vigente()) return null;
-      if(m){
-        segs = m; snapCache[clave] = m;
-        if(trozo.length === SNAP_TROZO){ try{ localStorage.setItem(clave, JSON.stringify(m)); }catch(e){} }
+      const trozo = pts.slice(i, i + SNAP_TROZO);
+      if(trozo.length < 2) break;
+      total++;
+      const clave = `snap2:${recId}:${k}:${trozo.length}`;
+      let segs = snapCache[clave];
+      if(!segs){ try{ const g = localStorage.getItem(clave); if(g) segs = JSON.parse(g); }catch(e){} }
+      if(!segs){
+        const m = await snapTrozo(trozo);
+        if(!vigente()) return null;
+        if(m){
+          segs = m; snapCache[clave] = m;
+          if(trozo.length === SNAP_TROZO){ try{ localStorage.setItem(clave, JSON.stringify(m)); }catch(e){} }
+        }
       }
+      if(segs){ ok++; ajustados.push(...segs); }
+      else directos.push(trozo.map(p => [p.lat, p.lng]));
+      alActualizar(ajustados.slice(), directos.slice(), huecos, ok, total);
     }
-    if(segs) ajustados++;
-    segmentos.push(...(segs || [trozo.map(p => [p.lat, p.lng])]));
-    alActualizar(segmentos.slice(), ajustados, total);
   }
-  return { ajustados, total };
+  if(total === 0) alActualizar([], [], huecos, 0, 0);
+  return { ajustados: ok, total, huecos: huecos.length };
 }
 
 function textoEstadoSnap(r){
-  if(!r || r.total === 0) return '';
-  if(r.ajustados === r.total) return `Recorrido ajustado a calles (${r.total} tramo${r.total===1?'':'s'}).`;
-  if(r.ajustados === 0) return 'No se pudo ajustar a calles (el servicio externo no respondió): se muestra la línea GPS directa.';
-  return `Ajustado a calles en ${r.ajustados} de ${r.total} tramos; el resto se muestra en línea directa.`;
+  if(!r) return '';
+  const h = r.huecos ? ` ${r.huecos} salto${r.huecos===1?'':'s'} sin datos GPS (línea naranja).` : '';
+  if(r.total === 0) return h.trim();
+  if(r.ajustados === r.total) return `Recorrido ajustado a calles (${r.total} tramo${r.total===1?'':'s'}).${h}`;
+  if(r.ajustados === 0) return `No se pudo ajustar a calles (el servicio externo no respondió): se muestra la línea GPS directa.${h}`;
+  return `Ajustado a calles en ${r.ajustados} de ${r.total} tramos; el resto (gris discontinua) no se pudo ajustar.${h}`;
 }
+
+function estiloSnapCapas(){ return {
+  directo: { color:'#8A94A8', weight:3, dashArray:'6 6', opacity:.9 },
+  hueco:   { color:'#E08A00', weight:3, dashArray:'4 7', opacity:.95 }
+}; }
 
 async function m_cargarParadasSup(ajustar){
   const { data } = await client.from('paradas').select('*, clientes(nombre, lat, lng)').eq('recorrido_id', m_recorridoSeleccionadoId).order('orden');
@@ -1427,9 +1466,11 @@ function d_renderResumen(data){
   `).join('');
 }
 
-let d_snapToken = 0;
+let d_snapToken = 0, d_replayActual = null;
 
 async function d_abrirReplay(r){
+  d_replayActual = r;
+  document.getElementById('d_btnReintentarSnap').classList.add('hidden');
   document.getElementById('d_cardReplay').classList.remove('hidden');
   document.getElementById('d_tituloReplay').textContent = `Recorrido Nº ${r.numero_recorrido} — ${r.operador_nombre} — ${r.fecha}`;
   document.getElementById('d_cardReplay').scrollIntoView({ behavior:'smooth' });
@@ -1447,7 +1488,7 @@ async function d_abrirReplay(r){
   const bounds = [];
   if(puntos.length > 0){
     const ll = puntos.map(p => [p.lat, p.lng]);
-    d_capas.push(L.polyline(ll, { color:'#8A94A8', weight:2, opacity:.55 }).addTo(d_mapa));
+    d_capas.push(L.polyline(ll, { color:'#8A94A8', weight:1.5, opacity:.3 }).addTo(d_mapa));
     ll.forEach(q => bounds.push(q));
   }
 
@@ -1500,13 +1541,26 @@ async function d_abrirReplay(r){
     });
   }
 
-  let snapLayer = null;
-  const rr = await snapearTraza(r.id, puntos, () => token === d_snapToken, (segs, ok, total) => {
-    if(!snapLayer){ snapLayer = L.polyline(segs, { color:'#1B2A4A', weight:4, dashArray:'1 9', lineCap:'round' }).addTo(d_mapa); d_capas.push(snapLayer); }
-    else snapLayer.setLatLngs(segs);
+  let capaSnap = null, capaDirecta = null, capaHuecos = null;
+  const est = estiloSnapCapas();
+  const rr = await snapearTraza(r.id, puntos, () => token === d_snapToken, (ajust, directos, huecos, ok, total) => {
+    if(!capaSnap){
+      capaSnap = L.polyline(ajust, { color:'#1B2A4A', weight:4, dashArray:'1 9', lineCap:'round' }).addTo(d_mapa);
+      capaDirecta = L.polyline(directos, est.directo).addTo(d_mapa);
+      capaHuecos = L.polyline(huecos, est.hueco).addTo(d_mapa);
+      d_capas.push(capaSnap, capaDirecta, capaHuecos);
+    } else { capaSnap.setLatLngs(ajust); capaDirecta.setLatLngs(directos); capaHuecos.setLatLngs(huecos); }
     if(estadoSnap) estadoSnap.textContent = `Ajustando a calles… ${ok}/${total} tramos.`;
   });
-  if(token === d_snapToken && rr && estadoSnap) estadoSnap.textContent = textoEstadoSnap(rr);
+  if(token === d_snapToken && rr){
+    if(estadoSnap) estadoSnap.textContent = textoEstadoSnap(rr);
+    document.getElementById('d_btnReintentarSnap').classList.toggle('hidden', !(rr.total > 0 && rr.ajustados < rr.total));
+  }
+}
+
+function d_reintentarSnap(){
+  snapPausaHasta = 0;
+  if(d_replayActual) d_abrirReplay(d_replayActual);
 }
 async function d_verFirma(path){
   const { data, error } = await client.storage.from('firmas').createSignedUrl(path, 300);
@@ -2150,6 +2204,10 @@ function bd_buscarClientes(){
   }, 300);
 }
 
+function bd_textoUbicacion(c){
+  return (c.lat != null && c.lng != null) ? `${c.lat}, ${c.lng}` : '';
+}
+
 function bd_seleccionarClienteEditar(c){
   bd_clienteEditando = c;
   document.getElementById('bd_sugerencias').classList.add('hidden');
@@ -2157,7 +2215,28 @@ function bd_seleccionarClienteEditar(c){
   document.getElementById('bd_editNombre').value = c.nombre || '';
   document.getElementById('bd_editDireccion').value = c.direccion || '';
   document.getElementById('bd_editTelefono').value = c.telefono || '';
+  document.getElementById('bd_editCoords').value = bd_textoUbicacion(c);
+  document.getElementById('bd_editCoordsEstado').textContent = (c.lat != null && c.lng != null) ? 'Este cliente tiene ubicación en el mapa.' : '⚠ Este cliente no tiene ubicación en el mapa (no aparecerá en los mapas ni se podrán verificar sus visitas).';
+  document.getElementById('bd_editarClienteMsg').innerHTML = '';
   document.getElementById('bd_bloqueEditarCliente').classList.remove('hidden');
+}
+
+function bd_parsearCoordenadas(texto){
+  const m = texto.replace(/;/g, ',').match(/-?\d+(?:[.,]\d+)?/g);
+  if(!m || m.length !== 2) return null;
+  const lat = parseFloat(m[0].replace(',', '.')), lng = parseFloat(m[1].replace(',', '.'));
+  if(isNaN(lat) || isNaN(lng)) return null;
+  return { lat, lng };
+}
+
+async function bd_geocodificar(direccion){
+  try{
+    const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=ar&q=${encodeURIComponent(direccion + ', Argentina')}`;
+    const res = await fetch(url, { headers: { 'Accept-Language': 'es' } });
+    const geo = await res.json();
+    if(geo && geo.length > 0) return { lat: parseFloat(geo[0].lat), lng: parseFloat(geo[0].lon) };
+  }catch(e){ /* sin resultado */ }
+  return null;
 }
 
 async function bd_guardarCliente(){
@@ -2165,21 +2244,35 @@ async function bd_guardarCliente(){
   const nombre = document.getElementById('bd_editNombre').value.trim();
   const direccion = document.getElementById('bd_editDireccion').value.trim();
   const telefono = document.getElementById('bd_editTelefono').value.trim();
+  const coordsTxt = document.getElementById('bd_editCoords').value.trim();
+  if(!nombre){ msg.innerHTML = `<div class="msg msg-err">El nombre no puede quedar vacío.</div>`; return; }
 
-  let lat = bd_clienteEditando.lat, lng = bd_clienteEditando.lng;
-  if(direccion !== bd_clienteEditando.direccion){
-    lat = null; lng = null;
-    try{
-      const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=ar&q=${encodeURIComponent(direccion + ', Argentina')}`;
-      const res = await fetch(url, { headers: { 'Accept-Language': 'es' } });
-      const geo = await res.json();
-      if(geo && geo.length > 0){ lat = parseFloat(geo[0].lat); lng = parseFloat(geo[0].lon); }
-    }catch(e){ /* si falla, queda sin coordenadas */ }
+  let lat = bd_clienteEditando.lat, lng = bd_clienteEditando.lng, aviso = '';
+  const coordsCambiadas = coordsTxt !== bd_textoUbicacion(bd_clienteEditando);
+
+  if(coordsCambiadas){
+    if(coordsTxt === ''){ lat = null; lng = null; aviso = 'Se quitó la ubicación del cliente.'; }
+    else {
+      const c = bd_parsearCoordenadas(coordsTxt);
+      if(!c || c.lat < -56 || c.lat > -21 || c.lng < -74 || c.lng > -53){
+        msg.innerHTML = `<div class="msg msg-err">Las coordenadas no parecen válidas para Argentina. Tienen que ser dos números, latitud y longitud (ej: -32.9468, -60.6393).</div>`; return;
+      }
+      lat = c.lat; lng = c.lng; aviso = 'Ubicación guardada con las coordenadas que cargaste.';
+    }
+  } else if(direccion !== (bd_clienteEditando.direccion || '')){
+    const geo = await bd_geocodificar(direccion);
+    if(geo){ lat = geo.lat; lng = geo.lng; aviso = 'La nueva dirección se ubicó automáticamente en el mapa.'; }
+    else { lat = null; lng = null; aviso = '⚠ No se pudo ubicar la nueva dirección en el mapa. Probá escribirla como "Calle 123, Localidad", o pegá las coordenadas.'; }
   }
 
   const { error } = await client.from('clientes').update({ nombre, direccion: direccion||null, telefono: telefono||null, lat, lng }).eq('id', bd_clienteEditando.id);
   if(error){ msg.innerHTML = `<div class="msg msg-err">${error.message}</div>`; return; }
-  msg.innerHTML = `<div class="msg msg-ok">Cliente actualizado.</div>`;
+
+  bd_clienteEditando = { ...bd_clienteEditando, nombre, direccion: direccion||null, telefono: telefono||null, lat, lng };
+  document.getElementById('bd_editCoords').value = bd_textoUbicacion(bd_clienteEditando);
+  document.getElementById('bd_editCoordsEstado').textContent = (lat != null) ? 'Este cliente tiene ubicación en el mapa.' : '⚠ Este cliente no tiene ubicación en el mapa.';
+  const clase = aviso.startsWith('⚠') ? 'msg-err' : 'msg-ok';
+  msg.innerHTML = `<div class="msg msg-ok">Cliente actualizado.</div>` + (aviso ? `<div class="msg ${clase}">${aviso}</div>` : '');
 }
 
 async function bd_importarCsv(){
